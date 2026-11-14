@@ -64,10 +64,53 @@ export class MockPriceProvider {
 }
 
 /**
- * Example of a real provider (not used by default). Point `baseUrl` at a backend that serves
- * parsed Price-Transparency data. Response shape expected:
- *   POST {baseUrl}/quotes  body: { items: [{ id, name, barcode? }] }
- *   → { [itemId]: { prices: { shufersal: 7.12, ramiLevy: 6.9, ... }, estimated: false } }
+ * Where each chain publishes its Price-Transparency files, for the backend that ingests them.
+ * Every chain must publish PriceFull / Promo / Stores XML files (gzipped) identified by its
+ * GS1 chain code (ChainId inside the files). `chainCode` and `portal` are left null on purpose:
+ * fill them from the chain's actual published files before going live, don't guess.
+ *   aliases: names a backend/feed may use for the chain, mapped back to our ids.
+ */
+export const CHAIN_FEEDS = {
+  shufersal: { chainCode: null, portal: null, aliases: ['shufersal', 'שופרסל'] },
+  ramiLevy: { chainCode: null, portal: null, aliases: ['ramilevy', 'rami_levy', 'rami-levy', 'רמי לוי'] },
+  victory: { chainCode: null, portal: null, aliases: ['victory', 'ויקטורי'] },
+  yochananof: { chainCode: null, portal: null, aliases: ['yochananof', 'yohananof', 'יוחננוף'] },
+  tivTaam: { chainCode: null, portal: null, aliases: ['tivtaam', 'tiv_taam', 'tiv-taam', 'טיב טעם'] },
+  // Carrefour Israel (Global Retail; took over the former Yeinot Bitan / Mega stores).
+  carrefour: { chainCode: null, portal: null, aliases: ['carrefour', 'קרפור', 'yeinotbitan', 'yeinot_bitan'] },
+};
+
+const FEED_ALIAS_TO_ID = Object.fromEntries(
+  Object.entries(CHAIN_FEEDS).flatMap(([id, f]) => [id.toLowerCase(), ...f.aliases].map((a) => [a.toLowerCase(), id])),
+);
+
+/** Map a backend chain key/name/code to our chain id (null if unknown). */
+export function resolveChainId(key) {
+  if (key == null) return null;
+  const k = String(key).trim().toLowerCase();
+  if (FEED_ALIAS_TO_ID[k]) return FEED_ALIAS_TO_ID[k];
+  const byCode = Object.entries(CHAIN_FEEDS).find(([, f]) => f.chainCode && String(f.chainCode) === k);
+  return byCode ? byCode[0] : null;
+}
+
+/** Normalize a backend quote: map chain keys to our ids and give every chain a value (null = no price). */
+export function normalizeQuote(raw) {
+  const prices = Object.fromEntries(CHAINS.map((c) => [c.id, null]));
+  for (const [key, value] of Object.entries(raw?.prices || {})) {
+    const id = resolveChainId(key);
+    const n = Number(value);
+    if (id && Number.isFinite(n) && n > 0) prices[id] = n;
+  }
+  return { ...raw, prices, estimated: Boolean(raw?.estimated) };
+}
+
+/**
+ * Real provider (not used by default). Point `baseUrl` at a backend that serves parsed
+ * Price-Transparency data for the chains in CHAIN_FEEDS (Carrefour included). Expected API:
+ *   GET  {baseUrl}/chains  → [{ id|code|name, ... }]
+ *   POST {baseUrl}/quotes  body: { chains: [...ids], items: [{ id, name, productId }] }
+ *   → { [itemId]: { prices: { shufersal: 7.12, carrefour: 6.95, ... }, estimated: false } }
+ * Chain keys in the response may be our ids, feed aliases or chain codes; normalizeQuote maps them.
  */
 export class TransparencyApiProvider {
   constructor({ baseUrl }) { this.baseUrl = baseUrl.replace(/\/$/, ''); }
@@ -75,17 +118,24 @@ export class TransparencyApiProvider {
   async getChains() {
     const res = await fetch(`${this.baseUrl}/chains`);
     if (!res.ok) throw new Error(`chains: HTTP ${res.status}`);
-    return res.json();
+    const remote = await res.json();
+    const available = new Set(remote.map((c) => resolveChainId(c.id ?? c.code ?? c.name)).filter(Boolean));
+    // Keep our display data (names, colors); only show chains the backend actually covers.
+    return CHAINS.filter((c) => available.has(c.id));
   }
 
   async getQuotes(items) {
     const res = await fetch(`${this.baseUrl}/quotes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: items.map(({ id, name, productId }) => ({ id, name, productId })) }),
+      body: JSON.stringify({
+        chains: CHAINS.map((c) => c.id),
+        items: items.map(({ id, name, productId }) => ({ id, name, productId })),
+      }),
     });
     if (!res.ok) throw new Error(`quotes: HTTP ${res.status}`);
-    return res.json();
+    const raw = await res.json();
+    return Object.fromEntries(Object.entries(raw).map(([itemId, q]) => [itemId, normalizeQuote(q)]));
   }
 
   async getQuote(item) {

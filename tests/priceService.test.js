@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeBasket, MockPriceProvider, createPriceService } from '../src/services/priceService.js';
+import { computeBasket, MockPriceProvider, createPriceService, normalizeQuote, resolveChainId } from '../src/services/priceService.js';
 
 const chains = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
 
@@ -42,4 +42,25 @@ test('mock provider: catalog item exact, unknown item estimated', async () => {
   assert.equal(q.x.prices.shufersal, 7.12);
   assert.equal(q.y.estimated, true);
   assert.ok(q.y.prices.ramiLevy > 0);
+});
+
+test('mock quotes include all six chains', async () => {
+  const svc = createPriceService(new MockPriceProvider({ latency: 0 }));
+  const q = await svc.getQuotes([{ id: 'x', name: 'קורנפלקס', category: 'pantry', productId: 'cornflakes' }]);
+  assert.equal(Object.keys(q.x.prices).length, 6);
+  assert.ok(q.x.prices.carrefour > 0);
+});
+
+test('backend quotes are normalized onto our chain ids (Carrefour included)', () => {
+  assert.equal(resolveChainId('Carrefour'), 'carrefour');
+  assert.equal(resolveChainId('קרפור'), 'carrefour');
+  assert.equal(resolveChainId('rami_levy'), 'ramiLevy');
+  assert.equal(resolveChainId('nope'), null);
+  const q = normalizeQuote({ prices: { carrefour: 6.95, 'רמי לוי': '6.90', unknown: 5, shufersal: -1 } });
+  assert.equal(q.prices.carrefour, 6.95);
+  assert.equal(q.prices.ramiLevy, 6.9);
+  assert.equal(q.prices.shufersal, null);
+  assert.equal(q.prices.tivTaam, null);
+  assert.equal(Object.keys(q.prices).length, 6);
+  assert.equal(q.estimated, false);
 });

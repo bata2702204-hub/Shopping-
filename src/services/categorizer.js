@@ -1,22 +1,46 @@
-// Smart categorization: free text → { category, product }.
-// 1) Match against the product catalog (names + aliases, Hebrew-plural tolerant).
-// 2) Fall back to per-department keyword roots.
-// 3) Otherwise "other". The user can always override the category in edit.
+// Smart categorization + fuzzy product search.
+//
+// categorize(text) → { category, product }
+//   1) catalog match on names/aliases (Hebrew plural tolerant), brands as a weaker signal
+//   2) department keyword roots
+//   3) subcategory names ("חד פעמי", "דגני בוקר" …)
+//   4) fuzzy search (prefix / typo tolerant)
+//   5) otherwise "other". The user can always override the category in edit.
+//
+// searchProducts(query) → ranked [{ product, score, via }] for autocomplete. Matches partial text
+// in the product name, aliases, brands, subcategory and department name, plus stems and typos.
 
 import { PRODUCTS } from '../data/products.mock.js';
-import { normalize, phraseKey, containsPhrase } from './hebrew.js';
+import { CATEGORY_BY_ID } from '../data/categories.js';
+import { normalize, phraseKey, containsPhrase, editDistance } from './hebrew.js';
 
-// Precomputed catalog index: every name/alias as a phrase key.
-const INDEX = PRODUCTS.flatMap((product) =>
-  [product.name, ...product.aliases].map((label) => ({ product, key: phraseKey(label) })),
-);
+// ── Exact-ish matching index for categorization ──────────────────────────────
+const LABEL_INDEX = PRODUCTS.flatMap((product) => [
+  ...[product.name, ...product.aliases].map((label) => ({ product, key: phraseKey(label), strong: true })),
+  ...product.brands.map((label) => ({ product, key: phraseKey(label), strong: false })),
+]);
+
+// Subcategory → department (most common department for that subcategory).
+const SUB_INDEX = (() => {
+  const counts = {};
+  for (const p of PRODUCTS) {
+    const key = phraseKey(p.sub);
+    counts[key] ??= {};
+    counts[key][p.category] = (counts[key][p.category] || 0) + 1;
+  }
+  return Object.entries(counts).map(([key, byCat]) => ({
+    key,
+    category: Object.entries(byCat).sort((a, b) => b[1] - a[1])[0][0],
+  }));
+})();
 
 // Keyword roots (substring match on normalized text). Order matters: more specific first,
 // so "שניצל קפוא" → frozen and "סבון כלים" → cleaning.
 const KEYWORDS = [
-  ['frozen', ['קפוא', 'גליד', 'ארטיק', 'שלגון']],
+  ['frozen', ['קפוא', 'גליד', 'ארטיק', 'שלגון', 'קרטיב']],
   ['cleaning', ['ניקוי', 'כביס', 'סבון', 'כלים', 'מדיח', 'אקונומיק', 'נייר', 'שקיות', 'אשפה', 'מטהר',
-    'מבריק', 'ספריי', 'מגבונ', 'שמפו', 'מרכך', 'דאודורנט', 'גילוח', 'טמפונ', 'תחבוש', 'חיתול', 'מברשת']],
+    'מבריק', 'ספריי', 'מגבונ', 'שמפו', 'מרכך', 'דאודורנט', 'גילוח', 'טמפונ', 'תחבוש', 'חיתול', 'מברשת',
+    'חד פעמי', 'חד-פעמי', 'סוללו', 'נורה', 'נורת', 'נרות', 'כפפות']],
   ['meat', ['בשר', 'עוף', 'עופות', 'דג ', 'דגים', 'קבב', 'המבורגר', 'כבד', 'צלי', 'אסאדו', 'כנפיים',
     'פרגית', 'סטייק', 'נקניק', 'קציצ', 'טונה טרי', 'בקר', 'כבש']],
   ['dairy', ['חלב', 'גבינ', 'יוגורט', 'שמנת', 'מעדן', 'ביצ', 'לבן', 'אשל', 'גיל ', 'קפיר', 'מוצרל', 'פרמז']],
@@ -30,7 +54,7 @@ const KEYWORDS = [
     'אבקת אפיה', 'שמרים', 'וניל', 'קוסקוס', 'בורגול', 'קינואה', 'מרק', 'אבקת מרק', 'פירורי לחם']],
 ];
 
-/** Find the best catalog product for free text, or null. */
+/** Find the best catalog product for free text, or null. Brands alone are a weak signal. */
 export function matchProduct(text) {
   const raw = phraseKey(text);
   const bare = phraseKey(text, { dropPrefix: true });
@@ -38,10 +62,11 @@ export function matchProduct(text) {
 
   let best = null;
   let bestScore = 0;
-  for (const { product, key } of INDEX) {
+  for (const { product, key, strong } of LABEL_INDEX) {
+    if (!key) continue;
     let score = 0;
-    if (key === raw || key === bare) score = 1000;
-    else if (containsPhrase(raw, key) || containsPhrase(bare, key)) score = 100 + key.length;
+    if (key === raw || key === bare) score = strong ? 1000 : 500;
+    else if (containsPhrase(raw, key) || containsPhrase(bare, key)) score = (strong ? 100 : 20) + key.length;
     if (score > bestScore) { best = product; bestScore = score; }
   }
   return best;
@@ -56,27 +81,131 @@ export function categoryFromKeywords(text) {
   return 'other';
 }
 
+/** Category from a subcategory name inside the text ("צלחות חד פעמיות לאירוע" → cleaning), or null. */
+export function categoryFromSubcategory(text) {
+  const raw = phraseKey(text, { dropPrefix: true });
+  let best = null;
+  for (const { key, category } of SUB_INDEX) {
+    if (containsPhrase(raw, key) && (!best || key.length > best.key.length)) best = { key, category };
+  }
+  return best?.category || null;
+}
+
+// ── Fuzzy search ──────────────────────────────────────────────────────────────
+const WEIGHT = { name: 1, alias: 0.92, brand: 0.8, sub: 0.7, category: 0.5 };
+
+const SEARCH_INDEX = PRODUCTS.map((product, order) => {
+  const fields = [
+    { kind: 'name', text: product.name },
+    ...product.aliases.map((text) => ({ kind: 'alias', text })),
+    ...product.brands.map((text) => ({ kind: 'brand', text })),
+    { kind: 'sub', text: product.sub },
+    { kind: 'category', text: CATEGORY_BY_ID[product.category]?.name || '' },
+  ].map((f) => ({ ...f, norm: normalize(f.text), stem: phraseKey(f.text), w: WEIGHT[f.kind] }));
+  const words = new Set();
+  fields.filter((f) => f.kind !== 'category').forEach((f) => f.norm.split(' ').forEach((w) => w.length >= 3 && words.add(w)));
+  return { product, order, fields, words: [...words] };
+});
+
+function textScore(field, q) {
+  if (field === q) return 100;
+  if (field.startsWith(q)) return 90;
+  if (field.includes(` ${q}`)) return 75;
+  if (q.length >= 4 && field.includes(q)) return 55; // mid-word only for 4+ letters (less noise)
+  return 0;
+}
+
+/** Best score of one query (phrase or token) against an entry's fields. Returns { score, via }. */
+function scoreTerm(entry, q, qStem) {
+  let score = 0;
+  let via = null;
+  for (const f of entry.fields) {
+    let s = textScore(f.norm, q);
+    if (!s && qStem && qStem.length >= 2) {
+      if (f.stem === qStem) s = 85;
+      else if (qStem.length >= 4 && (f.stem.startsWith(qStem) || f.stem.includes(` ${qStem}`))) s = 65;
+    }
+    s *= f.w;
+    if (s > score) { score = s; via = f.kind; }
+  }
+  return { score, via };
+}
+
+/** Typo tolerance: 1 edit for 4–6 letters, 2 for 7+; also tolerant prefixes while still typing. */
+function fuzzyTerm(entry, q) {
+  if (q.length < 4) return 0;
+  const max = q.length >= 7 ? 2 : 1;
+  let best = 0;
+  for (const w of entry.words) {
+    if (editDistance(w, q, max) <= max) best = Math.max(best, 45);
+    else if (w.length > q.length && editDistance(w.slice(0, q.length), q, 1) <= 1) best = Math.max(best, 35);
+  }
+  return best;
+}
+
+/** Ranked catalog matches for free text. */
+export function searchProducts(query, limit = 8) {
+  const q = normalize(query);
+  if (q.length < 2) return [];
+  const qStem = phraseKey(query, { dropPrefix: true });
+  const tokens = q.split(' ').filter((t) => t.length >= 2);
+
+  const results = [];
+  for (const entry of SEARCH_INDEX) {
+    let { score, via } = scoreTerm(entry, q, qStem);
+
+    if (!score && tokens.length > 1) {
+      // Every word must match somewhere (e.g. "גבינה תנובה", "צלחות פלסטיק").
+      let sum = 0;
+      let all = true;
+      for (const t of tokens) {
+        const r = scoreTerm(entry, t, phraseKey(t, { dropPrefix: true }));
+        const s = r.score || fuzzyTerm(entry, t);
+        if (!s) { all = false; break; }
+        sum += s;
+        via ||= r.via || 'fuzzy';
+      }
+      if (all) score = (sum / tokens.length) * 0.85;
+    }
+
+    if (!score) {
+      score = fuzzyTerm(entry, q);
+      if (score) via = 'fuzzy';
+    }
+    if (score) results.push({ product: entry.product, score, via, order: entry.order });
+  }
+
+  // Typo matches only fill in when there's nothing solid.
+  const solid = results.some((r) => r.via !== 'fuzzy' && r.score >= 50);
+  const kept = solid ? results.filter((r) => r.via !== 'fuzzy') : results;
+  kept.sort((a, b) => b.score - a.score || a.product.name.length - b.product.name.length || a.order - b.order);
+  return kept.slice(0, limit).map(({ product, score, via }) => ({ product, score: Math.round(score), via }));
+}
+
+/** Autocomplete suggestions (products only). */
+export function suggest(query, limit = 8) {
+  return searchProducts(query, limit).map((r) => r.product);
+}
+
 /** Main entry: categorize free text. */
 export function categorize(text) {
   const product = matchProduct(text);
+  const keywordCat = categoryFromKeywords(text);
   // A keyword like "קפוא" overrides a fresh-product match ("חזה עוף קפוא" → frozen).
-  if (product && product.category !== 'frozen' && categoryFromKeywords(text) === 'frozen') {
-    return { category: 'frozen', product };
-  }
+  if (product && product.category !== 'frozen' && keywordCat === 'frozen') return { category: 'frozen', product };
   if (product) return { category: product.category, product };
-  return { category: categoryFromKeywords(text), product: null };
-}
+  if (keywordCat !== 'other') return { category: keywordCat, product: null };
 
-/** Autocomplete suggestions: catalog products whose name/alias starts with (or contains) the query. */
-export function suggest(query, limit = 6) {
-  const q = normalize(query);
-  if (q.length < 2) return [];
-  const starts = [];
-  const contains = [];
-  for (const product of PRODUCTS) {
-    const labels = [product.name, ...product.aliases].map(normalize);
-    if (labels.some((l) => l.startsWith(q))) starts.push(product);
-    else if (labels.some((l) => l.includes(q))) contains.push(product);
+  const subCat = categoryFromSubcategory(text);
+  if (subCat) return { category: subCat, product: null };
+
+  // Fuzzy fallback: prefixes ("קורנפ") and typos ("קורנפלס") of known products.
+  const [top] = searchProducts(text, 1);
+  const q = normalize(text);
+  // Short inputs need an exact name/alias hit ("ספר" must not become "ספריי").
+  const strongEnough = q.length >= 4 ? top?.score >= 60 : top?.score >= 92;
+  if (top && (strongEnough || (top.via === 'fuzzy' && q.length >= 5))) {
+    return { category: top.product.category, product: top.score >= 80 || top.via === 'fuzzy' ? top.product : null };
   }
-  return [...starts, ...contains].slice(0, limit);
+  return { category: 'other', product: null };
 }

@@ -1,9 +1,17 @@
 import { useMemo, useRef, useState } from 'react';
 import { Plus, Sparkles } from 'lucide-react';
-import { suggest } from '../services/categorizer.js';
+import { searchProducts } from '../services/categorizer.js';
 import { parseQuickAdd } from '../utils/format.js';
 import { getCategory } from '../data/categories.js';
 import { CategoryBadge, Price } from './ui.jsx';
+
+// Which brand / alias made a product match, for the little hint in the dropdown.
+const norm = (s) => s.toLowerCase().replace(/[׳'"״]/g, '');
+const matchedBrand = (p, q) => p.brands.find((b) => norm(b).includes(norm(q.trim())));
+const matchedAlias = (p, q) => {
+  const a = p.aliases.find((x) => norm(x).includes(norm(q.trim())));
+  return a && !norm(p.name).includes(norm(q.trim())) ? `"${a}"` : null;
+};
 
 export default function QuickAdd({ onAdd }) {
   const [text, setText] = useState('');
@@ -14,7 +22,7 @@ export default function QuickAdd({ onAdd }) {
 
   // Suggest on the last comma-separated chunk only.
   const lastChunk = text.split(',').pop().trim();
-  const suggestions = useMemo(() => (focused ? suggest(lastChunk, 5) : []), [lastChunk, focused]);
+  const suggestions = useMemo(() => (focused ? searchProducts(lastChunk, 10) : []), [lastChunk, focused]);
 
   const submit = (raw = text) => {
     const entries = parseQuickAdd(raw);
@@ -62,9 +70,13 @@ export default function QuickAdd({ onAdd }) {
       </form>
 
       {suggestions.length > 0 && (
-        <ul className="card absolute inset-x-0 top-full z-30 mt-2 overflow-hidden p-1 animate-slide-in" role="listbox">
-          {suggestions.map((p) => {
+        <ul className="card absolute inset-x-0 top-full z-30 mt-2 max-h-[55vh] overflow-y-auto overscroll-contain p-1 animate-slide-in" role="listbox">
+          {suggestions.map(({ product: p, via }) => {
             const min = Math.min(...Object.values(p.prices));
+            const hint = via === 'brand' ? `מותג: ${matchedBrand(p, lastChunk) || p.brands[0]}`
+              : via === 'fuzzy' ? 'התכוונת ל…?'
+                : via === 'alias' ? matchedAlias(p, lastChunk)
+                  : null;
             return (
               <li key={p.id}>
                 <button
@@ -74,9 +86,14 @@ export default function QuickAdd({ onAdd }) {
                   className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-start transition hover:bg-slate-50 dark:hover:bg-slate-800"
                 >
                   <span className={`h-2 w-2 shrink-0 rounded-full ${getCategory(p.category).dot}`} />
-                  <span className="flex-1">
-                    <span className="block font-medium">{p.name}</span>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">{p.unit} · מ-<Price value={min} /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate font-medium">{p.name}</span>
+                      {hint && <span className="chip shrink-0 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{hint}</span>}
+                    </span>
+                    <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                      {p.sub} · {p.unit} · מ-<Price value={min} />
+                    </span>
                   </span>
                   <CategoryBadge id={p.category} />
                 </button>

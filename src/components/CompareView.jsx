@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChevronDown, Info, Loader2, Scale, Split, Trophy } from 'lucide-react';
 import { CHAIN_BY_ID } from '../data/chains.js';
 import { useShopping } from '../store/ShoppingContext.jsx';
-import { fmtQty } from '../utils/format.js';
+import { fmt, fmtQty } from '../utils/format.js';
 import { Button, CategoryIcon, EmptyState, Price } from './ui.jsx';
 
 export default function CompareView({ prices, goList, goShop }) {
@@ -109,7 +109,6 @@ export default function CompareView({ prices, goList, goShop }) {
             <table className="w-full table-fixed text-sm">
               <thead>
                 <tr className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
-                  <th className="w-[27%] bg-slate-50 px-2 py-2 text-start font-semibold dark:bg-slate-800">מוצר</th>
                   {chains.map((c) => (
                     <th key={c.id} className="px-0.5 py-2 text-center text-[10px] font-semibold leading-tight">
                       <span className="mx-auto mb-0.5 block h-1.5 w-1.5 rounded-full" style={{ background: c.color }} />{c.short}
@@ -117,49 +116,53 @@ export default function CompareView({ prices, goList, goShop }) {
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {shop.items.map((item) => {
-                  const q = quotes[item.id];
-                  const best = basket.perItem[item.id];
-                  return (
-                    <tr key={item.id}>
-                      <td className="px-2 py-2.5">
-                        <div className="flex items-center gap-1.5 font-medium">
+              {/* Each product: a full-width name line, then one price per chain (₪). */}
+              {shop.items.map((item) => {
+                const q = quotes[item.id];
+                const best = basket.perItem[item.id];
+                return (
+                  <tbody key={item.id} className="border-t border-slate-100 dark:border-slate-800">
+                    <tr>
+                      <td colSpan={chains.length} className="px-3 pb-0.5 pt-2.5">
+                        <div className="flex items-center gap-1.5 text-[13px] font-medium">
                           <CategoryIcon id={item.category} className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                           <span className="truncate">{item.name}</span>
-                        </div>
-                        <div className="text-[11px] text-slate-400">
-                          ×{fmtQty(item.qty)} {q?.estimated && <span className="text-amber-600 dark:text-amber-400">· משוער</span>}
+                          <span className="shrink-0 text-[11px] font-normal text-slate-400">×{fmtQty(item.qty)}</span>
+                          {q?.estimated && <span className="shrink-0 text-[11px] text-amber-600 dark:text-amber-400">משוער</span>}
                         </div>
                       </td>
+                    </tr>
+                    <tr>
                       {chains.map((c) => {
                         const price = q?.prices[c.id];
                         const isMin = best && price === best.cheapestPrice;
                         const isMax = best && price === best.priciestPrice && best.priciestPrice !== best.cheapestPrice;
                         return (
-                          <td key={c.id} className="px-0.5 py-2 text-center">
+                          <td key={c.id} className="px-0.5 pb-2.5 pt-1 text-center">
                             {price == null ? <span className="text-slate-300">—</span> : (
-                              <span className={`inline-block rounded-md px-1 py-1 text-[11px] font-semibold ${
+                              <span className={`inline-block rounded-md px-1 py-0.5 text-[11px] font-semibold ${
                                 isMin ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
                                   : isMax ? 'text-rose-500' : 'text-slate-600 dark:text-slate-300'}`}>
-                                <Price value={price * (Number(item.qty) || 1)} />
+                                <span className="tabular-nums">{fmt(price * (Number(item.qty) || 1))}</span>
                               </span>
                             )}
                           </td>
                         );
                       })}
                     </tr>
-                  );
-                })}
-              </tbody>
+                  </tbody>
+                );
+              })}
               <tfoot>
+                <tr className="bg-slate-50 dark:bg-slate-800/50">
+                  <td colSpan={chains.length} className="px-3 pt-2 text-xs font-bold">סה״כ (₪)</td>
+                </tr>
                 <tr className="bg-slate-50 font-bold dark:bg-slate-800/50">
-                  <td className="px-2 py-2.5">סה״כ</td>
                   {chains.map((c) => {
                     const t = totals.find((x) => x.chainId === c.id);
                     return (
-                      <td key={c.id} className={`px-0.5 py-2.5 text-center text-[11px] ${c.id === cheapest?.chainId ? 'text-emerald-600 dark:text-emerald-400' : ''}`}>
-                        <Price value={t?.total} />
+                      <td key={c.id} className={`px-0.5 pb-2.5 pt-1 text-center text-[11px] ${c.id === cheapest?.chainId ? 'text-emerald-600 dark:text-emerald-400' : ''}`}>
+                        <span className="tabular-nums">{fmt(t?.total)}</span>
                       </td>
                     );
                   })}
