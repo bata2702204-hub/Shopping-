@@ -1,66 +1,76 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeBasket, MockPriceProvider, createPriceService, normalizeQuote, resolveChainId } from '../src/services/priceService.js';
+import { readFileSync } from 'node:fs';
+import { parseRealPrices, quoteFor, computeBasket } from '../src/services/priceService.js';
 
-const chains = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+// Small fixture in the exact real_prices.json format.
+const fixture = {
+  lastUpdated: '2026-11-14T03:00:00',
+  chainOrder: ['shufersal', 'ramiLevy', 'victory', 'yochananof', 'tivTaam', 'carrefour'],
+  chains: [
+    { id: 'shufersal', status: 'ok', storeName: 'דיל חולון' },
+    { id: 'ramiLevy', status: 'ok' },
+    { id: 'victory', status: 'error', error: 'x' },
+    { id: 'yochananof', status: 'stale', fileTime: '2026-11-13T03:00:00' },
+  ],
+  fields: ['barcode', 'name', 'manufacturer', 'unit', 'weighted', 'prices', 'category', 'dictId'],
+  products: [
+    ['111', 'חלב 3% 1 ל', 'תנובה', '1 ליטר', 0, [7.1, 6.9, null, 7.0, null, null], 'dairy', 'milk'],
+    ['222', 'במבה 80 גרם', 'אסם', '80 גרם', 0, [4.9, 3.9, null, null, null, null], 'pantry', 'bamba'],
+    ['333', 'רק בשופרסל', '', '', 0, [9.9, null, null, null, null, null], 'other', null],
+  ],
+};
+const db = parseRealPrices(fixture);
+const items = [{ id: 'a', qty: 2, barcode: '111' }, { id: 'b', qty: 1, barcode: '222' }, { id: 'c', qty: 1, barcode: null, name: 'משהו' }];
+const quotes = Object.fromEntries(items.map((i) => [i.id, quoteFor(db, i)]));
 
-test('computeBasket totals, cheapest, savings, split', () => {
-  const items = [{ id: '1', qty: 2 }, { id: '2', qty: 1 }];
-  const quotes = {
-    1: { prices: { a: 10, b: 8, c: 12 }, estimated: false },
-    2: { prices: { a: 5, b: 9, c: 6 }, estimated: true },
-  };
-  const r = computeBasket(items, quotes, chains);
-  assert.deepEqual(r.totals.map((t) => [t.chainId, t.total]), [['a', 25], ['b', 25], ['c', 30]]);
-  assert.equal(r.cheapest.chainId, 'a');
-  assert.equal(r.priciest.chainId, 'c');
-  assert.equal(r.savings, 5);
-  assert.equal(r.splitTotal, 21); // 2*8 + 5
-  assert.equal(r.perItem[1].cheapestChain, 'b');
-  assert.equal(r.estimatedCount, 1);
+test('parse: chains carry status; prices null when absent', () => {
+  assert.equal(db.products.length, 3);
+  assert.deepEqual(db.chains.filter((c) => c.hasData).map((c) => c.id), ['shufersal', 'ramiLevy', 'yochananof']);
+  const milk = db.byBarcode.get('111');
+  assert.equal(milk.prices.ramiLevy, 6.9);
+  assert.equal(milk.prices.victory, null);
+  assert.equal(milk.prices.carrefour, null);
+  assert.equal(milk.chainCount, 3);
+  assert.equal(milk.minPrice, 6.9);
 });
 
-test('missing prices rank a chain lower', () => {
-  const r = computeBasket([{ id: '1', qty: 1 }], { 1: { prices: { a: null, b: 9, c: 10 } } }, chains);
-  assert.equal(r.cheapest.chainId, 'b');
-  assert.equal(r.totals.at(-1).chainId, 'a');
+test('unlinked items get no prices at all', () => {
+  assert.equal(quotes.c.linked, false);
+  assert.ok(Object.values(quotes.c.prices).every((v) => v === null));
 });
 
-test('empty list', () => {
-  const r = computeBasket([], {}, chains);
-  assert.equal(r.savings, 0);
-  assert.equal(r.itemCount, 0);
+test('basket: only chains with every linked item are ranked; no invented prices', () => {
+  const b = computeBasket(items, quotes, db.chains);
+  assert.equal(b.linkedCount, 2);
+  assert.deepEqual(b.unlinked.map((i) => i.id), ['c']);
+  assert.deepEqual(b.complete.map((t) => [t.chainId, t.total]), [['ramiLevy', 17.7], ['shufersal', 19.1]]);
+  assert.equal(b.cheapest.chainId, 'ramiLevy');
+  assert.equal(b.priciest.chainId, 'shufersal');
+  assert.equal(b.savings, 1.4);
+  const yoch = b.totals.find((t) => t.chainId === 'yochananof');
+  assert.equal(yoch.complete, false);
+  assert.equal(yoch.missing, 1); // במבה not in its file
+  const victory = b.totals.find((t) => t.chainId === 'victory');
+  assert.equal(victory.hasData, false);
+  assert.equal(b.totals.at(-1).hasData, false); // no-data chains last
 });
 
-test('mock provider: catalog item exact, unknown item estimated', async () => {
-  const svc = createPriceService(new MockPriceProvider({ latency: 0 }));
-  const q = await svc.getQuotes([
-    { id: 'x', name: 'חלב', category: 'dairy', productId: 'milk' },
-    { id: 'y', name: 'משהו', category: 'pantry', productId: null },
-  ]);
-  assert.equal(q.x.estimated, false);
-  assert.equal(q.x.prices.shufersal, 7.12);
-  assert.equal(q.y.estimated, true);
-  assert.ok(q.y.prices.ramiLevy > 0);
+test('basket with a single complete chain has no savings claim', () => {
+  const only = [{ id: 'x', qty: 1, barcode: '333' }];
+  const b = computeBasket(only, { x: quoteFor(db, only[0]) }, db.chains);
+  assert.equal(b.cheapest.chainId, 'shufersal');
+  assert.equal(b.priciest, null);
+  assert.equal(b.savings, 0);
 });
 
-test('mock quotes include all six chains', async () => {
-  const svc = createPriceService(new MockPriceProvider({ latency: 0 }));
-  const q = await svc.getQuotes([{ id: 'x', name: 'קורנפלקס', category: 'pantry', productId: 'cornflakes' }]);
-  assert.equal(Object.keys(q.x.prices).length, 6);
-  assert.ok(q.x.prices.carrefour > 0);
-});
-
-test('backend quotes are normalized onto our chain ids (Carrefour included)', () => {
-  assert.equal(resolveChainId('Carrefour'), 'carrefour');
-  assert.equal(resolveChainId('קרפור'), 'carrefour');
-  assert.equal(resolveChainId('rami_levy'), 'ramiLevy');
-  assert.equal(resolveChainId('nope'), null);
-  const q = normalizeQuote({ prices: { carrefour: 6.95, 'רמי לוי': '6.90', unknown: 5, shufersal: -1 } });
-  assert.equal(q.prices.carrefour, 6.95);
-  assert.equal(q.prices.ramiLevy, 6.9);
-  assert.equal(q.prices.shufersal, null);
-  assert.equal(q.prices.tivTaam, null);
-  assert.equal(Object.keys(q.prices).length, 6);
-  assert.equal(q.estimated, false);
+test('the shipped real_prices.json parses and has real data', () => {
+  const real = parseRealPrices(JSON.parse(readFileSync(new URL('../public/real_prices.json', import.meta.url), 'utf8')));
+  assert.ok(real.products.length > 1000);
+  assert.ok(real.lastUpdated);
+  assert.ok(real.chains.some((c) => c.hasData));
+  for (const p of real.products) {
+    assert.ok(/^\d+$/.test(p.barcode), p.barcode);
+    for (const v of Object.values(p.prices)) assert.ok(v === null || v > 0);
+  }
 });

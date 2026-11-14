@@ -1,57 +1,62 @@
 import { useMemo, useRef, useState } from 'react';
 import { Plus, PlusCircle, Sparkles } from 'lucide-react';
-import { categorize, searchProducts } from '../services/categorizer.js';
-import { estimatePrices } from '../services/customProducts.js';
+import { categorize } from '../services/categorizer.js';
+import { exactReal, searchReal } from '../services/realSearch.js';
 import { normalize } from '../services/hebrew.js';
+import { CHAIN_BY_ID } from '../data/chains.js';
 import { parseQuickAdd } from '../utils/format.js';
 import { getCategory } from '../data/categories.js';
 import { CategoryBadge, Price } from './ui.jsx';
 
-// Which brand / alias made a product match, for the little hint in the dropdown.
-const norm = (s) => s.toLowerCase().replace(/[׳'"״]/g, '');
-const matchedBrand = (p, q) => p.brands.find((b) => norm(b).includes(norm(q.trim())));
-const matchedAlias = (p, q) => {
-  const a = p.aliases.find((x) => norm(x).includes(norm(q.trim())));
-  return a && !norm(p.name).includes(norm(q.trim())) ? `"${a}"` : null;
-};
+/** Real price summary for a suggestion: cheapest real price and where. */
+function PriceHint({ product }) {
+  if (product.minPrice == null) return <span>אין מחיר</span>;
+  const chains = Object.entries(product.prices).filter(([, v]) => v != null);
+  return (
+    <span>
+      <Price value={product.minPrice} />
+      {chains.length === 1 ? ` · ${CHAIN_BY_ID[chains[0][0]].short}` : ` · ב-${chains.length} רשתות`}
+    </span>
+  );
+}
 
-export default function QuickAdd({ onAdd }) {
+export default function QuickAdd({ onAdd, db }) {
   const [text, setText] = useState('');
   const [focused, setFocused] = useState(false);
-  const [flash, setFlash] = useState(null); // [{ name, category }]
+  const [flash, setFlash] = useState(null); // [{ name, category, linked }]
   const inputRef = useRef(null);
   const flashTimer = useRef(null);
 
-  // Suggest on the last comma-separated chunk only.
+  // Suggest on the last comma-separated chunk only (minus a leading quantity).
   const lastChunk = text.split(',').pop().trim();
-  const suggestions = useMemo(() => (focused ? searchProducts(lastChunk, 10) : []), [lastChunk, focused]);
+  const typed = parseQuickAdd(lastChunk)[0]?.name || '';
+  const suggestions = useMemo(() => (focused && db ? searchReal(db, typed, 10) : []), [typed, focused, db]);
 
-  // Fallback row: add exactly what was typed as a new product (auto department + estimated price).
+  // Free-text row: add exactly what was typed (no price until a real product is chosen).
   const create = useMemo(() => {
-    const typed = parseQuickAdd(lastChunk)[0]?.name || '';
     if (!focused || normalize(typed).length < 2) return null;
-    if (suggestions.some((r) => normalize(r.product.name) === normalize(typed))) return null;
-    const { category, product } = categorize(typed);
-    if (product && suggestions.some((r) => r.product.id === product.id)) return null; // already listed above
-    const prices = product ? product.prices : estimatePrices(category);
-    return { name: typed, category, linked: product, min: Math.min(...Object.values(prices)) };
-  }, [lastChunk, focused, suggestions]);
+    if (suggestions.some((r) => r.product.nameNorm === normalize(typed))) return null;
+    return { name: typed, category: categorize(typed).category };
+  }, [typed, focused, suggestions]);
 
-  const submit = (raw = text) => {
-    const entries = parseQuickAdd(raw);
+  const commit = (entries) => {
     if (!entries.length) return;
     const added = onAdd(entries);
     setText('');
     clearTimeout(flashTimer.current);
-    setFlash(added.map((i) => ({ name: i.name, category: i.category })));
-    flashTimer.current = setTimeout(() => setFlash(null), 2600);
+    setFlash(added.map((i) => ({ name: i.name, category: i.category, linked: Boolean(i.barcode) })));
+    flashTimer.current = setTimeout(() => setFlash(null), 3200);
     inputRef.current?.focus();
   };
 
+  // Enter: every chunk is added; a chunk that is exactly a real product name is linked to it.
+  const submit = () => commit(parseQuickAdd(text).map((e) => ({ ...e, product: exactReal(db, e.name) })));
+
+  // Picking a suggestion links the last chunk to that real product.
   const pick = (product) => {
-    const parts = text.split(',');
-    parts[parts.length - 1] = ` ${product.name}`;
-    submit(parts.join(','));
+    const parts = parseQuickAdd(text);
+    const last = parts.pop();
+    commit([...parts.map((e) => ({ ...e, product: exactReal(db, e.name) })), { name: product.name, qty: last?.qty || 1, product }]);
   };
 
   return (
@@ -69,7 +74,7 @@ export default function QuickAdd({ onAdd }) {
           enterKeyHint="done"
           autoComplete="off"
           aria-label="הוספת מוצר"
-          placeholder="מה צריך לקנות? למשל: חלב, ביצים, 2 עגבניות"
+          placeholder="חפשו מוצר: חלב, קוטג, במבה…"
           className="min-w-0 flex-1 bg-transparent px-2 py-2 text-base outline-none placeholder:text-slate-400"
         />
         <button
@@ -84,50 +89,37 @@ export default function QuickAdd({ onAdd }) {
 
       {(suggestions.length > 0 || create) && (
         <ul className="card absolute inset-x-0 top-full z-30 mt-2 max-h-[55vh] overflow-y-auto overscroll-contain p-1 animate-slide-in" role="listbox">
-          {suggestions.map(({ product: p, via }) => {
-            const min = Math.min(...Object.values(p.prices));
-            const hint = via === 'custom' ? 'מוצר שלך'
-              : via === 'brand' ? `מותג: ${matchedBrand(p, lastChunk) || p.brands[0]}`
-              : via === 'fuzzy' ? 'התכוונת ל…?'
-                : via === 'alias' ? matchedAlias(p, lastChunk)
-                  : null;
-            return (
-              <li key={p.id}>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => pick(p)}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-start transition hover:bg-slate-50 dark:hover:bg-slate-800"
-                >
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${getCategory(p.category).dot}`} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5">
-                      <span className="truncate font-medium">{p.name}</span>
-                      {hint && <span className="chip shrink-0 bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{hint}</span>}
-                    </span>
-                    <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
-                      {p.sub} · {p.unit} · מ-<Price value={min} />
-                    </span>
+          {suggestions.map(({ product: p }) => (
+            <li key={p.barcode}>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => pick(p)}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-start transition hover:bg-slate-50 dark:hover:bg-slate-800"
+              >
+                <span className={`h-2 w-2 shrink-0 rounded-full ${getCategory(p.category).dot}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{p.name}</span>
+                  <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                    {[p.manufacturer, p.unit].filter(Boolean).join(' · ')}{(p.manufacturer || p.unit) && ' · '}<PriceHint product={p} />
                   </span>
-                  <CategoryBadge id={p.category} />
-                </button>
-              </li>
-            );
-          })}
+                </span>
+                <CategoryBadge id={p.category} />
+              </button>
+            </li>
+          ))}
           {create && (
             <li className={suggestions.length ? 'mt-1 border-t border-slate-100 pt-1 dark:border-slate-800' : ''}>
               <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => submit()}
+                onClick={submit}
                 className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-start transition hover:bg-emerald-50 dark:hover:bg-emerald-500/10"
               >
                 <PlusCircle className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">הוסף "{create.name}"</span>
-                  <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
-                    {create.linked ? `יזוהה כ: ${create.linked.name}` : 'מוצר חדש'} · ≈ <Price value={create.min} />{!create.linked && ' משוער'}
-                  </span>
+                  <span className="block truncate font-medium">הוסף "{create.name}" לרשימה</span>
+                  <span className="block truncate text-xs text-slate-500 dark:text-slate-400">ללא מחיר — בחרו מוצר מהרשימה כדי להשוות</span>
                 </span>
                 <CategoryBadge id={create.category} />
               </button>
@@ -136,13 +128,13 @@ export default function QuickAdd({ onAdd }) {
         </ul>
       )}
 
-      {flash && !suggestions.length && (
+      {flash && !suggestions.length && !create && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs animate-slide-in" aria-live="polite">
           <Sparkles className="h-3.5 w-3.5 text-emerald-500" />
-          <span className="text-slate-500 dark:text-slate-400">קוטלג אוטומטית:</span>
+          <span className="text-slate-500 dark:text-slate-400">נוסף:</span>
           {flash.map((f, i) => (
             <span key={i} className={`chip ${getCategory(f.category).badge}`}>
-              {f.name} ← {getCategory(f.category).name}
+              {f.name} ← {getCategory(f.category).name}{!f.linked && ' · ללא מחיר'}
             </span>
           ))}
         </div>

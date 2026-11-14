@@ -1,10 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer } from 'react';
 import { categorize } from '../services/categorizer.js';
-import { upsertCustomProduct } from '../services/customProducts.js';
 import { normalize } from '../services/hebrew.js';
 import { uid } from '../utils/format.js';
 
 const STORAGE_KEY = 'smart-shopping:state:v1';
+
+// Items saved before real data had links to mock products (productId); those are dropped.
+const migrate = (items) => items.map(({ productId, ...it }) => ({ barcode: null, ...it }));
 
 const initialState = { items: [], selectedChain: null };
 
@@ -13,31 +15,25 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return initialState;
     const parsed = JSON.parse(raw);
-    return { ...initialState, ...parsed, items: Array.isArray(parsed.items) ? parsed.items : [] };
+    return { ...initialState, ...parsed, items: Array.isArray(parsed.items) ? migrate(parsed.items) : [] };
   } catch {
     return initialState;
   }
 }
 
 /**
- * Resolve free text to { category, product }. Unknown names become a custom product
- * (keyword-detected department + estimated department price), so every item can be priced.
+ * Build a list item. With a real product (from real_prices.json) it is linked by barcode and gets
+ * real prices; free text without a real product is kept unlinked (no price) until one is chosen.
  */
-export function resolveProduct(name, categoryOverride) {
-  const { category: detected, product } = categorize(name);
-  const category = categoryOverride || detected;
-  if (product && !product.custom) return { category, product };
-  return { category, product: upsertCustomProduct(name, category) };
-}
-
-/** Build an item from free text: auto-categorized and always linked to a product. */
-export function makeItem(name, qty = 1) {
-  const { category, product } = resolveProduct(name);
-  return { id: uid(), name: name.trim(), qty, category, productId: product.id, checked: false, addedAt: Date.now() };
+export function makeItem({ name, qty = 1, product = null }) {
+  if (product) {
+    return { id: uid(), name: product.name, qty, category: product.category, barcode: product.barcode, checked: false, addedAt: Date.now() };
+  }
+  return { id: uid(), name: name.trim(), qty, category: categorize(name).category, barcode: null, checked: false, addedAt: Date.now() };
 }
 
 const sameItem = (a, b) =>
-  (a.productId && a.productId === b.productId) || normalize(a.name) === normalize(b.name);
+  (a.barcode ? a.barcode === b.barcode : !b.barcode && normalize(a.name) === normalize(b.name));
 
 function reducer(state, action) {
   switch (action.type) {
@@ -84,7 +80,7 @@ export function ShoppingProvider({ children }) {
   }, [state]);
 
   const addMany = useCallback((entries) => {
-    const items = entries.map(({ name, qty }) => makeItem(name, qty));
+    const items = entries.map(makeItem);
     dispatch({ type: 'add', items });
     return items;
   }, []);
@@ -123,7 +119,8 @@ export function useShopping() {
   return v;
 }
 
-export const SAMPLE_LIST = [
-  ['חלב', 2], ['ביצים', 1], ['קוטג׳', 2], ['עגבניות', 1], ['מלפפונים', 1], ['בננות', 1],
-  ['לחם', 1], ['חזה עוף', 1], ['אורז', 1], ['טחינה', 1], ['חומר כביסה', 1], ['נייר טואלט', 1], ['גלידה', 1],
-].map(([name, qty]) => ({ name, qty }));
+// Example list: each term is resolved to the top real product found by search when loaded.
+export const SAMPLE_TERMS = [
+  ['חלב 3%', 2], ['ביצים', 1], ['קוטג', 2], ['עגבניה', 1], ['מלפפון', 1], ['בננה', 1],
+  ['לחם אחיד', 1], ['חזה עוף', 1], ['אורז פרסי', 1], ['טחינה', 1], ['אבקת כביסה', 1], ['נייר טואלט 32', 1], ['במבה 80 גרם', 1],
+];

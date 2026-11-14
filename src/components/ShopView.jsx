@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { CheckCheck, ChevronDown, Eye, EyeOff, PartyPopper, ShoppingCart } from 'lucide-react';
 import { CATEGORIES } from '../data/categories.js';
 import { CHAIN_BY_ID } from '../data/chains.js';
-import { lookupProduct } from '../services/customProducts.js';
 import { useShopping } from '../store/ShoppingContext.jsx';
 import { fmtQty } from '../utils/format.js';
 import { Button, CategoryIcon, Checkbox, EmptyState, Price } from './ui.jsx';
@@ -13,7 +12,10 @@ export default function ShopView({ prices, toast, goList }) {
   const [hideDone, setHideDone] = useState(false);
   const [open, setOpen] = useState({}); // categoryId → bool (explicit user override)
 
-  const chainId = shop.selectedChain || basket.cheapest?.chainId || chains[0].id;
+  // Only chains with real data can be shopped against.
+  const dataChains = chains.filter((c) => c.hasData);
+  const chainId = dataChains.some((c) => c.id === shop.selectedChain) ? shop.selectedChain
+    : basket.cheapest?.chainId || dataChains[0]?.id || null;
 
   // Sections in store-walking (aisle) order.
   const sections = useMemo(() => CATEGORIES
@@ -35,14 +37,16 @@ export default function ShopView({ prices, toast, goList }) {
   const total = shop.items.length;
   const done = shop.items.filter((i) => i.checked).length;
   const pct = Math.round((done / total) * 100);
-  const priceOf = (i) => (quotes[i.id]?.prices[chainId] ?? 0) * (Number(i.qty) || 1);
+  const unitPrice = (i) => (chainId ? quotes[i.id]?.prices[chainId] ?? null : null);
+  const priceOf = (i) => (unitPrice(i) ?? 0) * (Number(i.qty) || 1);
+  const missingHere = shop.items.filter((i) => unitPrice(i) == null).length;
   const cartTotal = shop.items.filter((i) => i.checked).reduce((s, i) => s + priceOf(i), 0);
   const listTotal = shop.items.reduce((s, i) => s + priceOf(i), 0);
 
   return (
     <div className="space-y-4">
       {/* Sticky progress + chain */}
-      <div className="sticky top-[60px] z-20 -mx-4 bg-slate-50/90 px-4 pb-3 pt-1 backdrop-blur dark:bg-slate-950/90">
+      <div className="sticky top-[68px] z-20 -mx-4 bg-slate-50/90 px-4 pb-3 pt-1 backdrop-blur dark:bg-slate-950/90">
         <div className="card p-4">
           <div className="flex items-end justify-between">
             <div>
@@ -50,11 +54,12 @@ export default function ShopView({ prices, toast, goList }) {
               <div className="text-2xl font-extrabold tabular-nums">{done}<span className="text-base font-semibold text-slate-400">/{total}</span></div>
             </div>
             <div className="text-end">
-              <div className="text-xs text-slate-500 dark:text-slate-400">בעגלה · {CHAIN_BY_ID[chainId].name}</div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">בעגלה · {chainId ? CHAIN_BY_ID[chainId].name : 'אין נתוני מחירים'}</div>
               <div className="text-lg font-bold">
                 <Price value={cartTotal} className="text-emerald-600 dark:text-emerald-400" />
                 <span className="text-sm font-medium text-slate-400"> / <Price value={listTotal} /></span>
               </div>
+              {missingHere > 0 && <div className="text-[11px] text-slate-400">{missingHere} פריטים ללא מחיר ברשת</div>}
             </div>
           </div>
           <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
@@ -62,7 +67,7 @@ export default function ShopView({ prices, toast, goList }) {
           </div>
           <div className="mt-3 flex items-center gap-2">
             <div className="flex flex-1 flex-wrap gap-1.5">
-              {chains.map((c) => (
+              {dataChains.map((c) => (
                 <button key={c.id} type="button" onClick={() => shop.selectChain(c.id)}
                   className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
                     c.id === chainId ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
@@ -109,7 +114,7 @@ export default function ShopView({ prices, toast, goList }) {
             {isOpen && (
               <ul className="divide-y divide-slate-100 dark:divide-slate-800">
                 {visible.map((item) => {
-                  const product = lookupProduct(item.productId);
+                  const product = quotes[item.id]?.product;
                   return (
                     <li key={item.id}>
                       <div role="button" tabIndex={0} onClick={() => shop.toggle(item.id)}
@@ -123,7 +128,9 @@ export default function ShopView({ prices, toast, goList }) {
                         </span>
                         <span className="text-end">
                           <span className="block rounded-lg bg-slate-100 px-2 py-0.5 text-sm font-bold tabular-nums dark:bg-slate-800">×{fmtQty(item.qty)}</span>
-                          {quotes[item.id] && <Price value={priceOf(item)} className="mt-1 block text-xs text-slate-400" />}
+                          {unitPrice(item) != null
+                            ? <Price value={priceOf(item)} className="mt-1 block text-xs text-slate-400" />
+                            : <span className="mt-1 block text-[11px] text-slate-400">{product ? 'לא קיים ברשת' : 'אין מידע'}</span>}
                         </span>
                       </div>
                     </li>

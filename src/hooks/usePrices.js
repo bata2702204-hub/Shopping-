@@ -1,30 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
-import { priceService, computeBasket } from '../services/priceService.js';
-import { CHAINS } from '../data/chains.js';
+import { computeBasket, loadRealPrices, quoteFor } from '../services/priceService.js';
 
-/** Fetch quotes for the list through the service layer and derive the basket comparison. */
-export function usePrices(items) {
-  const [quotes, setQuotes] = useState({});
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  // Refetch only when the identity of items changes (not on qty/checked changes).
-  const signature = items.map((i) => `${i.id}:${i.productId}:${i.name}:${i.category}`).join('|');
-
+/** Load real_prices.json once. status: 'loading' | 'ready' | 'error'. */
+export function useRealData() {
+  const [state, setState] = useState({ status: 'loading', db: null, error: null });
   useEffect(() => {
     let alive = true;
-    setLoading(true);
-    priceService
-      .getQuotes(items)
-      .then((q) => { if (alive) { setQuotes(q); setError(null); } })
-      .catch((e) => { if (alive) setError(e); })
-      .finally(() => { if (alive) setLoading(false); });
+    loadRealPrices()
+      .then((db) => alive && setState({ status: 'ready', db, error: null }))
+      .catch((error) => alive && setState({ status: 'error', db: null, error }));
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature]);
+  }, []);
+  return state;
+}
 
-  const basket = useMemo(() => computeBasket(items, quotes, CHAINS), [items, quotes]);
-  return { quotes, basket, loading, error, chains: CHAINS };
+/** Real quotes for the list and the basket comparison derived from them. */
+export function usePrices(items, db) {
+  const quotes = useMemo(() => Object.fromEntries(items.map((it) => [it.id, quoteFor(db, it)])), [items, db]);
+  const chains = db?.chains || [];
+  const basket = useMemo(() => computeBasket(items, quotes, chains), [items, quotes, chains]);
+  return { quotes, basket, chains, db };
 }
 
 export function useTheme() {

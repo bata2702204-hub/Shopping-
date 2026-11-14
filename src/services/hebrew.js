@@ -9,10 +9,22 @@ export function normalize(text = '') {
     .replace(/[׳`’']/g, "'")
     .replace(/[״“”"]/g, '"')
     .replace(/[^א-תa-zA-Z0-9'"%\s]/g, ' ')
+    // Real item names glue numbers to words: "100כוסות", "עגבניה690ג", "חומוס40%טחינה"
+    .replace(/(\d%?)(?=[א-תa-zA-Z])/g, '$1 ')
+    .replace(/([א-תa-zA-Z])(?=\d)/g, '$1 ')
     .toLowerCase()
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .split(' ')
+    .map((w) => ABBREVIATIONS[w] || w)
+    .join(' ');
 }
+
+// Common abbreviations in supermarket item names (price-transparency files).
+const ABBREVIATIONS = {
+  'חד"פ': 'חד פעמי', 'חדפ': 'חד פעמי', 'חד"פעמי': 'חד פעמי',
+  'יוג': 'יוגורט', 'ת': 'תבנית', 'טמפו': 'טמפון', 'מט': 'מטלית', 'שמפ': 'שמפו', 'אב': 'אבקת',
+};
 
 /**
  * Rough singular stem of one Hebrew word: finals → regular, plural/feminine suffixes stripped.

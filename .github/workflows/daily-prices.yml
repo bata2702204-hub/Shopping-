@@ -1,0 +1,94 @@
+name: Daily real prices
+
+# Pulls REAL prices from the chains' price-transparency files every morning, rebuilds the app
+# into docs/ and pushes to main so GitHub Pages serves the new prices.
+on:
+  schedule:
+    # GitHub cron is UTC only. Israel is UTC+2 in winter and UTC+3 in summer, so both 03:00 and
+    # 04:00 UTC are scheduled and the "guard" step lets only the run at 06:xx Israel time proceed.
+    - cron: '0 3 * * *'
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: daily-prices
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Guard — run at 06:00 Israel time (or manually)
+        id: guard
+        run: |
+          hour=$(TZ=Asia/Jerusalem date +%H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$hour" = "06" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Israel time is ${hour}:xx — the other scheduled run handles today."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.guard.outputs.run == 'true'
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.run == 'true'
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          pip install --quiet requests lxml
+          npm ci
+
+      - name: Fetch real prices
+        if: steps.guard.outputs.run == 'true'
+        env:
+          PUBLISHEDPRICES_ENABLED: ${{ vars.PUBLISHEDPRICES_ENABLED }}
+        run: python scripts/fetch_real_prices.py
+
+      - name: Tag departments
+        if: steps.guard.outputs.run == 'true'
+        run: node scripts/enrich_prices.mjs
+
+      - name: Test and build
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          npm test
+          npm run build
+
+      - name: Commit and push
+        if: steps.guard.outputs.run == 'true'
+        id: push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/real_prices.json docs
+          if git diff --cached --quiet; then
+            echo "No price changes today."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Daily real prices $(TZ=Asia/Jerusalem date +%Y-%m-%d)"
+            git push
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ask GitHub Pages to rebuild
+        if: steps.push.outputs.pushed == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"

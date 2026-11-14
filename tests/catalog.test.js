@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PRODUCTS } from '../src/data/products.mock.js';
-import { CHAINS } from '../src/data/chains.js';
+import { PRODUCTS } from '../src/data/dictionary.js';
 import { CATEGORY_BY_ID } from '../src/data/categories.js';
 
 test('catalog has 550+ products across all departments', () => {
@@ -31,20 +30,11 @@ test('no name/alias is shared by two products', () => {
   }
 });
 
-test('every product is priced at every chain, including Carrefour', () => {
-  assert.ok(CHAINS.some((c) => c.id === 'carrefour'));
-  for (const p of PRODUCTS) {
-    for (const c of CHAINS) assert.ok(p.prices[c.id] > 0, `${p.id} @ ${c.id}`);
-  }
-});
 
-test('mock prices are stable and plausible', () => {
-  const milk = PRODUCTS.find((p) => p.id === 'milk');
-  assert.equal(milk.prices.shufersal, 7.12);
-  assert.equal(milk.prices.carrefour, 6.95);
+
+test('dictionary carries no prices or units (real data only)', () => {
   for (const p of PRODUCTS) {
-    const vals = Object.values(p.prices);
-    // cheap produce really does vary ~2x between discount and premium chains
-    assert.ok(Math.max(...vals) / Math.min(...vals) <= 2.1, `${p.id} spread too wide`);
+    assert.equal(p.prices, undefined, p.id);
+    assert.equal(p.unit, undefined, p.id);
   }
 });

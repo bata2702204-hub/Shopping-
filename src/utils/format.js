@@ -22,3 +22,9 @@ export function parseQuickAdd(text) {
     })
     .filter((x) => x.name);
 }
+
+/** "2026-11-14T03:00:00" (Israel local time from the price files) → "14.11.2026 03:00". */
+export function fmtUpdated(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso || '');
+  return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}` : '';
+}

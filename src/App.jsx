@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ListChecks, Moon, Scale, ShoppingCart, Sun, Undo2 } from 'lucide-react';
+import { AlertTriangle, Clock, ListChecks, Loader2, Moon, Scale, ShoppingCart, Sun, Undo2 } from 'lucide-react';
 import { useShopping } from './store/ShoppingContext.jsx';
-import { usePrices, useTheme } from './hooks/usePrices.js';
+import { usePrices, useRealData, useTheme } from './hooks/usePrices.js';
+import { fmtUpdated } from './utils/format.js';
 import ListView from './components/ListView.jsx';
 import CompareView from './components/CompareView.jsx';
 import ShopView from './components/ShopView.jsx';
@@ -19,7 +20,8 @@ const readTab = () => {
 
 export default function App() {
   const shop = useShopping();
-  const prices = usePrices(shop.items);
+  const real = useRealData();
+  const prices = usePrices(shop.items, real.db);
   const [dark, toggleTheme] = useTheme();
   const [tab, setTabState] = useState(readTab);
   const [toastState, setToast] = useState(null);
@@ -49,13 +51,18 @@ export default function App() {
   return (
     <div className="min-h-dvh pb-28">
       <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-slate-50/80 backdrop-blur-lg dark:border-slate-800/70 dark:bg-slate-950/80">
-        <div className="mx-auto flex h-[60px] max-w-xl items-center gap-3 px-4">
+        <div className="mx-auto flex h-[68px] max-w-xl items-center gap-3 px-4">
           <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-emerald-400 to-teal-600 text-white shadow-md shadow-emerald-600/25">
             <ShoppingCart className="h-5 w-5" />
           </div>
           <div className="flex-1 leading-tight">
             <h1 className="text-lg font-extrabold tracking-tight">סל חכם</h1>
             <p className="text-xs text-slate-500 dark:text-slate-400">{current.label}{shop.items.length > 0 && ` · ${remaining} נותרו`}</p>
+            <p className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-400" data-testid="price-freshness">
+              {real.status === 'loading' && <><Loader2 className="h-3 w-3 animate-spin" /> טוען מחירים אמיתיים…</>}
+              {real.status === 'error' && <><AlertTriangle className="h-3 w-3 text-amber-500" /> לא ניתן לטעון את המחירים</>}
+              {real.status === 'ready' && <><Clock className="h-3 w-3" /> מחירים עודכנו {fmtUpdated(real.db.lastUpdated)}</>}
+            </p>
           </div>
           <button type="button" onClick={toggleTheme} className="icon-btn" aria-label={dark ? 'מצב בהיר' : 'מצב כהה'}>
             <span key={String(dark)} className="animate-pop">{dark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}</span>

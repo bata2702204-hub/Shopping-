@@ -1,4 +1,6 @@
-// Smart categorization + fuzzy product search.
+// Smart categorization + fuzzy search over the DICTIONARY (src/data/catalog).
+// Used to put free text / real product names in a department and to expand searches
+// ("כריות" → cereals, "גו" → GO). It never produces prices.
 //
 // categorize(text) → { category, product }
 //   1) catalog match on names/aliases (Hebrew plural tolerant), brands as a weaker signal
@@ -10,10 +12,9 @@
 // searchProducts(query) → ranked [{ product, score, via }] for autocomplete. Matches partial text
 // in the product name, aliases, brands, subcategory and department name, plus stems and typos.
 
-import { PRODUCTS } from '../data/products.mock.js';
+import { PRODUCTS } from '../data/dictionary.js';
 import { CATEGORY_BY_ID } from '../data/categories.js';
 import { normalize, phraseKey, containsPhrase, editDistance } from './hebrew.js';
-import { getCustomProducts, customVersion, findCustomByName } from './customProducts.js';
 
 // ── Exact-ish matching index for categorization ──────────────────────────────
 const LABEL_INDEX = PRODUCTS.flatMap((product) => [
@@ -41,11 +42,13 @@ const KEYWORDS = [
   ['frozen', ['קפוא', 'גליד', 'ארטיק', 'שלגון', 'קרטיב']],
   ['cleaning', ['ניקוי', 'כביס', 'סבון', 'כלים', 'מדיח', 'אקונומיק', 'נייר', 'שקיות', 'אשפה', 'מטהר',
     'מבריק', 'ספריי', 'מגבונ', 'שמפו', 'מרכך', 'דאודורנט', 'גילוח', 'טמפונ', 'תחבוש', 'חיתול', 'מברשת',
-    'חד פעמי', 'חד-פעמי', 'סוללו', 'נורה', 'נורת', 'נרות', 'כפפות']],
+    'חד פעמי', 'חד-פעמי', 'סוללו', 'נורה', 'נורת', 'נרות', 'כפפות', 'צלחת', 'צלחות', 'כוסות', 'קעריות',
+    'תבנית', 'תבניות', 'גביעי', 'רדיד', 'אלומיני', 'מפות', 'מפת', 'צמרונ', 'מברשות', 'פינצט', 'קיסמ',
+    'שיפוד', 'לגבר', 'תחתון סופג', 'אביזרים לבית', 'להסרת שיער', 'סכו', 'מגבת', 'מגבות', 'שמפו', 'קרם']],
   ['meat', ['בשר', 'עוף', 'עופות', 'דג ', 'דגים', 'קבב', 'המבורגר', 'כבד', 'צלי', 'אסאדו', 'כנפיים',
     'פרגית', 'סטייק', 'נקניק', 'קציצ', 'טונה טרי', 'בקר', 'כבש']],
   ['dairy', ['חלב', 'גבינ', 'יוגורט', 'שמנת', 'מעדן', 'ביצ', 'לבן', 'אשל', 'גיל ', 'קפיר', 'מוצרל', 'פרמז']],
-  ['bakery', ['לחם', 'פית', 'מאפ', 'בגט', 'חלה', 'חלות', 'עוגה', 'עוגת', 'קרואסון', 'טורטיי', 'לאפה']],
+  ['bakery', ['לחם', 'לחמני', 'פית', 'מאפ', 'בגט', 'חלה', 'חלות', 'עוגה', 'עוגת', 'קרואסון', 'טורטיי', 'לאפה']],
   ['produce', ['ירק', 'פרי', 'פירות', 'סלט', 'עלי ', 'נענע', 'שמיר', 'בזיליק', 'תות', 'אפרסק', 'שזיפ',
     'אגס', 'מנגו', 'קלמנטינ', 'אננס', 'רימונ', 'תאנ', 'כרוב', 'כרובית', 'ברוקולי', 'סלק', 'צנון', 'קולורבי',
     'דלעת', 'תירס טרי', 'בצל ירוק', 'ג\'ינג\'ר', 'שרי']],
@@ -54,6 +57,12 @@ const KEYWORDS = [
     'אגוז', 'בוטנ', 'גרעינ', 'צימוק', 'תמר', 'שתי', 'מיץ', 'בירה', 'יין', 'סודה', 'מים', 'פודינג',
     'אבקת אפיה', 'שמרים', 'וניל', 'קוסקוס', 'בורגול', 'קינואה', 'מרק', 'אבקת מרק', 'פירורי לחם']],
 ];
+
+/** Word index where phrase `needle` starts inside `hay` (both phrase keys), or null. */
+function wordIndex(hay, needle) {
+  const i = ` ${hay} `.indexOf(` ${needle} `);
+  return i < 0 ? null : hay.slice(0, i).split(' ').filter(Boolean).length;
+}
 
 /** Find the best catalog product for free text, or null. Brands alone are a weak signal. */
 export function matchProduct(text) {
@@ -67,7 +76,12 @@ export function matchProduct(text) {
     if (!key) continue;
     let score = 0;
     if (key === raw || key === bare) score = strong ? 1000 : 500;
-    else if (containsPhrase(raw, key) || containsPhrase(bare, key)) score = (strong ? 100 : 20) + key.length;
+    else {
+      // Partial match: longer labels win, and labels near the start win more — in product names
+      // the first words say what it is ("יופלה GO אפרסק" is a yogurt, not a peach).
+      const pos = wordIndex(raw, key) ?? wordIndex(bare, key);
+      if (pos != null) score = (strong ? 100 : 20) + key.length + (pos === 0 ? 15 : -2 * pos);
+    }
     if (score > bestScore) { best = product; bestScore = score; }
   }
   return best;
@@ -113,16 +127,6 @@ function buildEntry(product, order) {
 
 const SEARCH_INDEX = PRODUCTS.map(buildEntry);
 
-// The user's own products (fallback-created) are searchable too; their index is rebuilt on change.
-let customIndex = { key: null, entries: [] };
-function customEntries() {
-  const list = getCustomProducts();
-  const key = `${customVersion()}:${list.length}`;
-  if (customIndex.key !== key) {
-    customIndex = { key, entries: list.map((p, i) => buildEntry(p, PRODUCTS.length + i)) };
-  }
-  return customIndex.entries;
-}
 
 function textScore(field, q) {
   if (field === q) return 100;
@@ -174,7 +178,7 @@ export function searchProducts(query, limit = 8) {
   const tokens = q.split(' ').filter((t) => t.length >= 2);
 
   const results = [];
-  for (const entry of [...SEARCH_INDEX, ...customEntries()]) {
+  for (const entry of SEARCH_INDEX) {
     let { score, via } = scoreTerm(entry, q, qStem);
 
     if (!score && tokens.length > 1) {
@@ -195,7 +199,7 @@ export function searchProducts(query, limit = 8) {
       score = fuzzyTerm(entry, q);
       if (score) via = 'fuzzy';
     }
-    if (score) results.push({ product: entry.product, score, via: entry.product.custom ? 'custom' : via, order: entry.order });
+    if (score) results.push({ product: entry.product, score, via, order: entry.order });
   }
 
   // Typo matches only fill in when there's nothing solid.
@@ -218,10 +222,6 @@ export function categorize(text) {
   if (product && product.category !== 'frozen' && keywordCat === 'frozen') return { category: 'frozen', product };
   if (product) return { category: product.category, product };
 
-  // Something the user added before (a custom product) keeps its department and price.
-  const custom = findCustomByName(text);
-  if (custom) return { category: custom.category, product: custom };
-
   if (keywordCat !== 'other') return { category: keywordCat, product: null };
 
   const subCat = categoryFromSubcategory(text);
@@ -232,7 +232,7 @@ export function categorize(text) {
   const q = normalize(text);
   // Short inputs need an exact name/alias hit ("ספר" must not become "ספריי").
   const strongEnough = q.length >= 4 ? top?.score >= 60 : top?.score >= 92;
-  if (top && !top.product.custom && (strongEnough || (top.via === 'fuzzy' && q.length >= 5))) {
+  if (top && (strongEnough || (top.via === 'fuzzy' && q.length >= 5))) {
     return { category: top.product.category, product: top.score >= 80 || top.via === 'fuzzy' ? top.product : null };
   }
   return { category: 'other', product: null };

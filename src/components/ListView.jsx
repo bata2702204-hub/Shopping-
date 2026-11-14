@@ -1,16 +1,16 @@
 import { useMemo, useState } from 'react';
-import { ChevronLeft, ClipboardList, Pencil, RotateCcw, Trash2, TrendingDown, Wand2 } from 'lucide-react';
+import { ChevronLeft, ClipboardList, Link2, Pencil, RotateCcw, Search, Trash2, TrendingDown, Unlink, Wand2 } from 'lucide-react';
 import { CATEGORIES, getCategory } from '../data/categories.js';
 import { CHAIN_BY_ID } from '../data/chains.js';
-import { lookupProduct } from '../services/customProducts.js';
 import { categorize } from '../services/categorizer.js';
-import { SAMPLE_LIST, resolveProduct, useShopping } from '../store/ShoppingContext.jsx';
+import { searchReal } from '../services/realSearch.js';
+import { SAMPLE_TERMS, useShopping } from '../store/ShoppingContext.jsx';
 import QuickAdd from './QuickAdd.jsx';
 import { Button, CategoryBadge, CategoryIcon, Checkbox, EmptyState, Price, Sheet, Stepper } from './ui.jsx';
 
 export default function ListView({ prices, toast, goCompare }) {
   const shop = useShopping();
-  const { basket, quotes } = prices;
+  const { basket, quotes, db } = prices;
   const [editing, setEditing] = useState(null);
 
   const groups = useMemo(() => {
@@ -29,24 +29,29 @@ export default function ListView({ prices, toast, goCompare }) {
     toast(`"${item.name}" נמחק`, undo);
   };
 
+  // Example list: each term becomes the top REAL product found for it.
+  const loadSample = () => shop.addMany(SAMPLE_TERMS
+    .map(([term, qty]) => ({ name: term, qty, product: searchReal(db, term, 1)[0]?.product || null }))
+    .filter((e) => e.product));
+
   return (
     <div className="space-y-4">
-      <QuickAdd onAdd={shop.addMany} />
+      <QuickAdd onAdd={shop.addMany} db={db} />
 
       {shop.items.length === 0 ? (
         <EmptyState
           icon={ClipboardList}
           title="הרשימה ריקה"
-          text="הקלידו מוצרים בשדה למעלה – הם יקוטלגו אוטומטית למחלקות ותקבלו השוואת מחירים בין הרשתות."
-          action={
-            <Button variant="soft" onClick={() => shop.addMany(SAMPLE_LIST)}>
+          text="חפשו מוצרים בשדה למעלה ובחרו מוצר מהרשימה – המחירים הם מחירים אמיתיים מקובצי השקיפות של הרשתות."
+          action={db && (
+            <Button variant="soft" onClick={loadSample}>
               <Wand2 className="h-4 w-4" /> טען רשימה לדוגמה
             </Button>
-          }
+          )}
         />
       ) : (
         <>
-          {basket.cheapest && basket.itemCount > 0 && (
+          {basket.cheapest && (
             <button
               type="button"
               onClick={goCompare}
@@ -54,7 +59,7 @@ export default function ListView({ prices, toast, goCompare }) {
             >
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20"><TrendingDown className="h-5 w-5" /></span>
               <span className="min-w-0 flex-1">
-                <span className="block text-xs text-emerald-50/90">הסל הזול ביותר</span>
+                <span className="block text-xs text-emerald-50/90">{basket.priciest ? 'הסל הזול ביותר' : 'עלות הסל'}</span>
                 <span className="block truncate font-bold">
                   {CHAIN_BY_ID[basket.cheapest.chainId].name} – <Price value={basket.cheapest.total} />
                 </span>
@@ -105,13 +110,13 @@ export default function ListView({ prices, toast, goCompare }) {
         </>
       )}
 
-      <EditSheet item={editing} onClose={() => setEditing(null)} onSave={(patch) => { shop.update(editing.id, patch); setEditing(null); }} />
+      <EditSheet item={editing} db={db} onClose={() => setEditing(null)} onSave={(patch) => { shop.update(editing.id, patch); setEditing(null); }} />
     </div>
   );
 }
 
 function ItemRow({ item, quote, best, onToggle, onQty, onEdit, onDelete }) {
-  const product = lookupProduct(item.productId);
+  const product = quote?.product;
   return (
     <li
       className={`flex items-center gap-3 px-3 py-3 transition-colors duration-300 animate-slide-in ${
@@ -124,15 +129,18 @@ function ItemRow({ item, quote, best, onToggle, onQty, onEdit, onDelete }) {
           {item.name}
         </div>
         <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-          {product && <span>{product.unit}</span>}
-          {best && quote && (
-            quote.estimated ? (
-              <span className="chip bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">≈ <Price value={best.cheapestPrice} /> משוער</span>
-            ) : (
-              <span className="chip bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
-                <Price value={best.cheapestPrice} /> ב{CHAIN_BY_ID[best.cheapestChain].short}
-              </span>
-            )
+          {product?.unit && <span>{product.unit}</span>}
+          {product && best && (
+            <span className="chip bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
+              <Price value={best.cheapestPrice} /> ב{CHAIN_BY_ID[best.cheapestChain].short}
+            </span>
+          )}
+          {product && !best && <span className="chip bg-slate-100 text-slate-500 dark:bg-slate-800">אין מידע על מחיר</span>}
+          {!product && (
+            <button type="button" onClick={onEdit}
+              className="chip bg-amber-50 text-amber-700 transition hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300">
+              <Link2 className="h-3 w-3" /> בחר מוצר להשוואת מחיר
+            </button>
           )}
         </div>
       </div>
@@ -147,40 +155,85 @@ function ItemRow({ item, quote, best, onToggle, onQty, onEdit, onDelete }) {
   );
 }
 
-function EditSheet({ item, onClose, onSave }) {
+function EditSheet({ item, db, onClose, onSave }) {
   return (
     <Sheet open={!!item} onClose={onClose} title="עריכת מוצר">
-      {item && <EditForm key={item.id} item={item} onSave={onSave} />}
+      {item && <EditForm key={item.id} item={item} db={db} onSave={onSave} />}
     </Sheet>
   );
 }
 
-function EditForm({ item, onSave }) {
+function EditForm({ item, db, onSave }) {
   const [name, setName] = useState(item.name);
   const [qty, setQty] = useState(item.qty);
   const [category, setCategory] = useState(item.category);
   const [touchedCategory, setTouchedCategory] = useState(false);
+  const [barcode, setBarcode] = useState(item.barcode || null);
+  const [query, setQuery] = useState(item.barcode ? '' : item.name);
+
+  const linked = barcode && db ? db.byBarcode.get(barcode) : null;
+  const results = useMemo(() => (db && !linked ? searchReal(db, query, 8) : []), [db, query, linked]);
 
   const onName = (v) => {
     setName(v);
-    if (!touchedCategory) setCategory(categorize(v).category); // live re-categorize until user picks one
+    if (!touchedCategory && !linked) setCategory(categorize(v).category); // live re-categorize
+  };
+
+  const link = (p) => {
+    setBarcode(p.barcode);
+    setName(p.name);
+    if (!touchedCategory) setCategory(p.category);
   };
 
   const save = (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    // Unknown names become (or update) a custom product priced for the chosen department.
-    const { product } = resolveProduct(name.trim(), category);
-    onSave({ name: name.trim(), qty: Number(qty) > 0 ? Number(qty) : 1, category, productId: product.id });
+    onSave({ name: name.trim(), qty: Number(qty) > 0 ? Number(qty) : 1, category, barcode: barcode || null });
   };
 
   return (
     <form onSubmit={save} className="space-y-4">
       <label className="block">
-        <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">שם המוצר</span>
-        <input value={name} onChange={(e) => onName(e.target.value)} autoFocus
+        <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">שם בפריט ברשימה</span>
+        <input value={name} onChange={(e) => onName(e.target.value)}
           className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-base outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 dark:border-slate-700 dark:bg-slate-800" />
       </label>
+
+      <div>
+        <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">מוצר אמיתי להשוואת מחיר</span>
+        {linked ? (
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 dark:border-emerald-500/30 dark:bg-emerald-500/10">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold">{linked.name}</span>
+              <span className="block text-xs text-slate-500 dark:text-slate-400">ברקוד {linked.barcode}{linked.manufacturer && ` · ${linked.manufacturer}`}</span>
+            </span>
+            <button type="button" className="icon-btn h-8 w-8" aria-label="בטל קישור" onClick={() => { setBarcode(null); setQuery(name); }}>
+              <Unlink className="h-4 w-4" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 dark:border-slate-700 dark:bg-slate-800">
+              <Search className="h-4 w-4 text-slate-400" />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} aria-label="חיפוש מוצר אמיתי"
+                placeholder="חפשו את המוצר בקובצי הרשתות" className="min-w-0 flex-1 bg-transparent py-2.5 text-base outline-none" />
+            </div>
+            <ul className="mt-1 max-h-48 overflow-y-auto">
+              {results.map(({ product: p }) => (
+                <li key={p.barcode}>
+                  <button type="button" onClick={() => link(p)}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-start text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
+                    <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                    {p.minPrice != null && <Price value={p.minPrice} className="text-xs text-slate-500" />}
+                  </button>
+                </li>
+              ))}
+              {query.trim().length >= 2 && !results.length && <li className="px-2 py-2 text-xs text-slate-400">לא נמצא מוצר תואם בקובצי הרשתות</li>}
+            </ul>
+          </>
+        )}
+      </div>
+
       <div>
         <span className="mb-1 block text-sm font-medium text-slate-600 dark:text-slate-300">כמות</span>
         <div className="flex items-center gap-3">
@@ -200,7 +253,7 @@ function EditForm({ item, onSave }) {
             </button>
           ))}
         </div>
-        <p className="mt-2 text-xs text-slate-400">זוהה אוטומטית: {getCategory(categorize(name).category).name}</p>
+        <p className="mt-2 text-xs text-slate-400">זוהה אוטומטית: {getCategory(linked ? linked.category : categorize(name).category).name}</p>
       </div>
       <Button type="submit" className="w-full py-3">שמור</Button>
     </form>
