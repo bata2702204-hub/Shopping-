@@ -22,7 +22,7 @@ npm run build    # בנייה לתיקיית docs/
 ## העלאה ל-GitHub Pages
 התיקייה `docs/` מכילה את הגרסה הבנויה ונשמרת ב-repo.
 ב-GitHub נכנסים ל-Settings ← Pages ← Source: "Deploy from a branch", בוחרים Branch `main` ותיקייה `/docs` ושומרים.
-אחרי כדקה האפליקציה זמינה בכתובת `https://<שם-המשתמש>.github.io/shopping/`.
+אחרי כדקה האפליקציה זמינה בכתובת https://bata2702204-hub.github.io/Shopping-/.
 בטלפון פותחים את הכתובת ואז תפריט ← "הוסף למסך הבית".
 
 אחרי כל שינוי בקוד מריצים `npm run build` ומעלים גם את `docs/`.
