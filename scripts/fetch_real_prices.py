@@ -60,21 +60,24 @@ class ChainConfig:
     username: str | None = None     # cerberus (url.publishedprices.co.il) public user
     urls: list[str] = field(default_factory=list)   # listing pages, tried in order
     chain_code: str | None = None   # only used to filter multi-chain listings
+    expected_code: str | None = None  # ChainId the file should carry (verified); mismatch → warning
+    disabled: str | None = None     # reason the chain isn't fetched (no verified source yet)
 
 
 CHAINS: list[ChainConfig] = [
     # Verified: open portal, files on Azure blob storage. Store 123 = שופרסל דיל חולון-גולדה.
     ChainConfig("shufersal", "שופרסל", "shufersal", store_id="123"),
-    # Cerberus portal (url.publishedprices.co.il) with each chain's public guest user.
-    ChainConfig("ramiLevy", "רמי לוי", "cerberus", username="RamiLevi"),
-    ChainConfig("yochananof", "יוחננוף", "cerberus", username="yohananof"),
-    ChainConfig("tivTaam", "טיב טעם", "cerberus", username="TivTaam"),
-    # Generic listing pages: any link to a PriceFull*.gz/.xml file is used.
-    ChainConfig("victory", "ויקטורי", "listing",
-                urls=["http://matrixcatalog.co.il/NBCompetitionRegulations.aspx"],
-                chain_code="7290696200003"),
-    ChainConfig("carrefour", "קרפור", "listing",
-                urls=["https://prices.carrefour.co.il/", "http://prices.ybitan.co.il/"]),
+    # Cerberus portal (url.publishedprices.co.il), each chain's public guest user, empty password.
+    # Usernames and ChainIds verified by logging in and reading the files (14.11.2026).
+    ChainConfig("ramiLevy", "רמי לוי", "cerberus", username="RamiLevi", expected_code="7290058140886"),
+    ChainConfig("yochananof", "יוחננוף", "cerberus", username="yohananof", expected_code="7290803800003"),
+    ChainConfig("tivTaam", "טיב טעם", "cerberus", username="TivTaam", expected_code="7290873255550"),
+    # No verified source yet. Add the chain's published guest user here to enable it.
+    ChainConfig("victory", "ויקטורי", "cerberus", username=None,
+                disabled="no verified guest user / file address for Victory yet"),
+    # prices.carrefour.co.il refuses connections from outside Israel (GitHub runners included).
+    ChainConfig("carrefour", "קרפור", "listing", urls=["https://prices.carrefour.co.il/"],
+                disabled="portal blocks connections from outside Israel"),
 ]
 
 
@@ -154,7 +157,10 @@ def fetch_cerberus(cfg: ChainConfig) -> tuple[bytes, dict]:
         "csrftoken": token.group(1) if token else "",
     })
     r.raise_for_status()
-    token = re.search(r'name="csrftoken"\s+content="([^"]+)"', get(s, f"{base}/file").text)
+    files_page = get(s, f"{base}/file")
+    if "/login" in files_page.url:
+        raise RuntimeError(f"guest login '{cfg.username}' was not accepted")
+    token = re.search(r'name="csrftoken"\s+content="([^"]+)"', files_page.text)
     listing = s.post(f"{base}/file/json/dir", timeout=TIMEOUT, data={
         "sEcho": 1, "iColumns": 5, "iDisplayStart": 0, "iDisplayLength": 100000,
         "sSearch": "PriceFull", "cd": "/", "csrftoken": token.group(1) if token else "",
@@ -169,7 +175,32 @@ def fetch_cerberus(cfg: ChainConfig) -> tuple[bytes, dict]:
     candidates = [f for f in files if (file_time(f["fname"]) or "") >= newest[:10]]  # same day
     pick = max(candidates, key=lambda f: int(f.get("size") or 0))           # biggest store that day
     data = decompress(get(s, f"{base}/file/d/{pick['fname']}").content)
-    return data, {"file": pick["fname"], "fileTime": file_time(pick["fname"])}
+    meta = {"file": pick["fname"], "fileTime": file_time(pick["fname"])}
+    store = re.search(r"-(\d{3,})-\d{8}", pick["fname"])
+    if store:
+        meta["storeName"] = _cerberus_store_name(s, base, token.group(1) if token else "", store.group(1))
+    return data, meta
+
+
+def _cerberus_store_name(s: requests.Session, base: str, csrf: str, store_id: str) -> str | None:
+    """Best effort: the chain's newest Stores file → name of the store. Never fails the fetch."""
+    try:
+        r = s.post(f"{base}/file/json/dir", timeout=TIMEOUT, data={
+            "sEcho": 1, "iDisplayStart": 0, "iDisplayLength": 1000, "sSearch": "Stores", "cd": "/", "csrftoken": csrf})
+        names = sorted(f["fname"] for f in r.json().get("aaData", []) if f.get("fname", "").lower().startswith("stores"))
+        if not names:
+            return None
+        xml = decompress(get(s, f"{base}/file/d/{names[-1]}").content)
+        want = int(store_id)
+        for _, el in etree.iterparse(io.BytesIO(xml), events=("end",), recover=True):
+            if isinstance(el.tag, str) and el.tag.lower() == "store":
+                f = {c.tag.lower(): (c.text or "").strip() for c in el if isinstance(c.tag, str)}
+                if f.get("storeid", "").isdigit() and int(f["storeid"]) == want:
+                    return f.get("storename") or None
+                el.clear()
+    except Exception as e:  # store name is cosmetic
+        print(f"[warn]  store name lookup failed: {e}", file=sys.stderr)
+    return None
 
 
 def fetch_listing(cfg: ChainConfig) -> tuple[bytes, dict]:
@@ -260,6 +291,10 @@ def run(only: list[str] | None, out: Path) -> int:
         if only and cfg.id not in only:
             chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "skipped"})
             continue
+        if cfg.disabled:
+            chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "disabled", "error": cfg.disabled})
+            print(f"[off]   {cfg.id:10} {cfg.disabled}")
+            continue
         if cfg.kind == "cerberus" and not PUBLISHEDPRICES_ENABLED:
             chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "disabled",
                                "error": "publishedprices login is off (set PUBLISHEDPRICES_ENABLED=true)"})
@@ -271,6 +306,9 @@ def run(only: list[str] | None, out: Path) -> int:
             items, header = parse_pricefull(xml)
             if not items:
                 raise RuntimeError("file parsed but contained no priced items")
+            code = (header.get("chainid") or "").strip()
+            if cfg.expected_code and code and code != cfg.expected_code:
+                print(f"[warn]  {cfg.id:10} ChainId in file is {code}, expected {cfg.expected_code}", file=sys.stderr)
             results[cfg.id] = items
             chain_meta.append({
                 "id": cfg.id, "name": cfg.name, "status": "ok",

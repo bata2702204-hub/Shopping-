@@ -24,14 +24,21 @@ GitHub Action (כל יום 06:00 שעון ישראל, או הרצה ידנית)
 אם רשת נכשלת ביום מסוים, נשמרים המחירים האמיתיים האחרונים שלה עם סטטוס `stale` ותאריך הקובץ המקורי.
 
 ## מצב הרשתות
-| רשת | מקור | מצב |
-|---|---|---|
-| שופרסל | prices.shufersal.co.il (פתוח) | ✅ נבדק ועובד — סניף דיל חולון-גולדה (123) |
-| רמי לוי, יוחננוף, טיב טעם | url.publishedprices.co.il (כניסה עם משתמש אורח ציבורי של כל רשת) | ⏸️ כבוי כברירת מחדל — מפעילים עם משתנה המאגר `PUBLISHEDPRICES_ENABLED=true` |
-| ויקטורי | matrixcatalog.co.il (http) | ⚠️ לא נבדק — לא נגיש מסביבת הפיתוח |
-| קרפור | prices.carrefour.co.il / prices.ybitan.co.il | ⚠️ השרת ניתק את החיבור מסביבת הפיתוח (ככל הנראה חסימה לכתובות מחוץ לישראל) |
+| רשת | מקור | סניף מייצג | מצב |
+|---|---|---|---|
+| שופרסל | prices.shufersal.co.il (פתוח) | דיל חולון-גולדה (123) | ✅ עובד |
+| רמי לוי | url.publishedprices.co.il, משתמש אורח `RamiLevi` | הגדול ביותר באותו יום (כרגע רמת החייל) | ✅ עובד |
+| יוחננוף | url.publishedprices.co.il, משתמש אורח `yohananof` | הגדול ביותר באותו יום (כרגע מודיעין ישפרו) | ✅ עובד |
+| טיב טעם | url.publishedprices.co.il, משתמש אורח `TivTaam` | הגדול ביותר באותו יום (כרגע ראשון מזרח) | ✅ עובד |
+| ויקטורי | — | — | ⏸️ אין עדיין מקור מאומת (מוסיפים שם משתמש אורח ב-`scripts/fetch_real_prices.py`) |
+| קרפור | prices.carrefour.co.il | — | ⏸️ הפורטל חוסם חיבורים מחוץ לישראל |
 
-הפעלת רשתות publishedprices: ב-GitHub ← Settings ← Secrets and variables ← Actions ← Variables ← New repository variable: `PUBLISHEDPRICES_ENABLED` = `true`.
+רשתות publishedprices פעילות רק כשמשתנה המאגר `PUBLISHEDPRICES_ENABLED` = `true`
+(Settings ← Secrets and variables ← Actions ← Variables).
+
+### השוואה כשאין סל מלא
+ירקות, בשר ומוצרי מותג פרטי מקבלים ברקוד פנימי שונה בכל רשת, ולכן לרוב אין רשת שיש לה את כל הסל.
+במקרה כזה האפליקציה משווה את המוצרים שנמכרים בכל הרשתות (אותו ברקוד), ומציינת כמה מוצרים לא נכללו.
 
 ## הרצה מקומית
 ```bash

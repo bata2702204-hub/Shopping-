@@ -69,8 +69,23 @@ test('the shipped real_prices.json parses and has real data', () => {
   assert.ok(real.products.length > 1000);
   assert.ok(real.lastUpdated);
   assert.ok(real.chains.some((c) => c.hasData));
+  // Real cross-chain comparison: several chains, and products listed in more than one of them.
+  assert.ok(real.chains.filter((c) => c.hasData).length >= 2, 'expected 2+ chains with data');
+  assert.ok(real.products.some((p) => p.chainCount >= 2));
   for (const p of real.products) {
     assert.ok(/^\d+$/.test(p.barcode), p.barcode);
     for (const v of Object.values(p.prices)) assert.ok(v === null || v > 0);
   }
+});
+
+test('no complete chain → compare the products every chain with data sells', () => {
+  const its = [{ id: 'a', qty: 2, barcode: '111' }, { id: 'b', qty: 1, barcode: '222' }];
+  const qs = Object.fromEntries(its.map((i) => [i.id, quoteFor(db, i)]));
+  const b = computeBasket(its, qs, db.chains);
+  // yochananof lacks במבה → no complete chain among the 3 with data … but ramiLevy+shufersal are complete
+  assert.equal(b.cheapest.chainId, 'ramiLevy');
+  // common = items priced in ALL data chains (shufersal, ramiLevy, yochananof) → only milk
+  assert.equal(b.common.count, 1);
+  assert.deepEqual(b.common.totals.map((t) => [t.chainId, t.total]), [['ramiLevy', 13.8], ['yochananof', 14], ['shufersal', 14.2]]);
+  assert.equal(b.common.savings, 0.4);
 });

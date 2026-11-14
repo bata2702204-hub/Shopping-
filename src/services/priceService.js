@@ -130,6 +130,26 @@ export function computeBasket(items, quotes, chains = CHAINS.map((c) => ({ ...c,
     }
   }
 
+  // When no chain has the whole basket (fresh produce, meat and store brands use different barcodes in
+  // each chain), compare the products that EVERY chain with data sells — same barcodes, real prices.
+  const dataChains = chains.filter((c) => c.hasData);
+  const commonItems = linkedItems.filter((it) => dataChains.every((c) => quotes[it.id].prices[c.id] != null));
+  let common = null;
+  if (dataChains.length >= 2 && commonItems.length > 0) {
+    const ct = dataChains.map((c) => ({
+      chainId: c.id,
+      total: round2(commonItems.reduce((sum, it) => sum + quotes[it.id].prices[c.id] * (Number(it.qty) > 0 ? Number(it.qty) : 1), 0)),
+    })).sort((a, b) => a.total - b.total);
+    common = {
+      itemIds: commonItems.map((it) => it.id),
+      count: commonItems.length,
+      totals: ct,
+      cheapest: ct[0],
+      priciest: ct[ct.length - 1],
+      savings: round2(ct[ct.length - 1].total - ct[0].total),
+    };
+  }
+
   const ranked = [
     ...complete,
     ...totals.filter((t) => !t.complete && t.hasData).sort((a, b) => a.missing - b.missing || a.total - b.total),
@@ -143,6 +163,7 @@ export function computeBasket(items, quotes, chains = CHAINS.map((c) => ({ ...c,
     priciest,
     savings: cheapest && priciest ? round2(priciest.total - cheapest.total) : 0,
     perItem,
+    common,
     splitTotal: round2(splitTotal),
     splitComplete,
     linkedCount: linkedItems.length,

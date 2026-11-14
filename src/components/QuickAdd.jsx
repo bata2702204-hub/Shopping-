@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useMemo, useRef, useState } from 'react';
 import { Plus, PlusCircle, Sparkles } from 'lucide-react';
 import { categorize } from '../services/categorizer.js';
 import { exactReal, searchReal } from '../services/realSearch.js';
@@ -30,7 +30,9 @@ export default function QuickAdd({ onAdd, db }) {
   // Suggest on the last comma-separated chunk only (minus a leading quantity).
   const lastChunk = text.split(',').pop().trim();
   const typed = parseQuickAdd(lastChunk)[0]?.name || '';
-  const suggestions = useMemo(() => (focused && db ? searchReal(db, typed, 10) : []), [typed, focused, db]);
+  // Searching ~40k real products takes ~100ms: defer it so typing stays smooth.
+  const deferredTyped = useDeferredValue(typed);
+  const suggestions = useMemo(() => (focused && db ? searchReal(db, deferredTyped, 10) : []), [deferredTyped, focused, db]);
 
   // Free-text row: add exactly what was typed (no price until a real product is chosen).
   const create = useMemo(() => {

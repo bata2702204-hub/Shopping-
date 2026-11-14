@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import { ChevronLeft, ClipboardList, Link2, Pencil, RotateCcw, Search, Trash2, TrendingDown, Unlink, Wand2 } from 'lucide-react';
 import { CATEGORIES, getCategory } from '../data/categories.js';
 import { CHAIN_BY_ID } from '../data/chains.js';
@@ -30,8 +30,13 @@ export default function ListView({ prices, toast, goCompare }) {
   };
 
   // Example list: each term becomes the top REAL product found for it.
+  // Prefers products sold in the most chains, so the comparison has something to compare.
   const loadSample = () => shop.addMany(SAMPLE_TERMS
-    .map(([term, qty]) => ({ name: term, qty, product: searchReal(db, term, 1)[0]?.product || null }))
+    .map(([term, qty]) => {
+      const hits = searchReal(db, term, 8).map((r) => r.product);
+      const best = hits.reduce((a, p) => (!a || p.chainCount > a.chainCount ? p : a), null);
+      return { name: term, qty, product: best };
+    })
     .filter((e) => e.product));
 
   return (
@@ -51,7 +56,29 @@ export default function ListView({ prices, toast, goCompare }) {
         />
       ) : (
         <>
-          {basket.cheapest && (
+          {!basket.priciest && basket.common && (
+            <button
+              type="button"
+              onClick={goCompare}
+              className="group flex w-full items-center gap-3 rounded-2xl bg-gradient-to-l from-emerald-500 to-teal-600 p-3.5 text-start text-white shadow-lg shadow-emerald-600/20 transition active:scale-[.99] animate-fade-up"
+            >
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20"><TrendingDown className="h-5 w-5" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs text-emerald-50/90">על {basket.common.count} מוצרים שנמכרים בכל הרשתות</span>
+                <span className="block truncate font-bold">
+                  {CHAIN_BY_ID[basket.common.cheapest.chainId].name} – <Price value={basket.common.cheapest.total} />
+                </span>
+                {basket.common.savings > 0 && (
+                  <span className="block text-xs text-emerald-50/90">
+                    חיסכון של <Price value={basket.common.savings} /> לעומת {CHAIN_BY_ID[basket.common.priciest.chainId].name}
+                  </span>
+                )}
+              </span>
+              <ChevronLeft className="h-5 w-5 transition group-hover:-translate-x-1" />
+            </button>
+          )}
+
+          {basket.cheapest && (basket.priciest || !basket.common) && (
             <button
               type="button"
               onClick={goCompare}
@@ -172,7 +199,8 @@ function EditForm({ item, db, onSave }) {
   const [query, setQuery] = useState(item.barcode ? '' : item.name);
 
   const linked = barcode && db ? db.byBarcode.get(barcode) : null;
-  const results = useMemo(() => (db && !linked ? searchReal(db, query, 8) : []), [db, query, linked]);
+  const deferredQuery = useDeferredValue(query);
+  const results = useMemo(() => (db && !linked ? searchReal(db, deferredQuery, 8) : []), [db, deferredQuery, linked]);
 
   const onName = (v) => {
     setName(v);

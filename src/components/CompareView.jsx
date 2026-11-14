@@ -9,7 +9,8 @@ import { Button, CategoryIcon, EmptyState, Price } from './ui.jsx';
 function chainStatusText(c) {
   if (c.status === 'stale') return `נתונים מ-${fmtUpdated(c.fileTime)} (העדכון היומי נכשל)`;
   if (c.status === 'ok') return null;
-  return 'אין מידע — קובץ המחירים של הרשת לא נאסף';
+  if (c.status === 'disabled') return 'אין מידע — לא זמין כרגע';
+  return 'אין מידע — קובץ המחירים של הרשת לא נאסף היום';
 }
 
 export default function CompareView({ prices, goList, goShop }) {
@@ -28,12 +29,14 @@ export default function CompareView({ prices, goList, goShop }) {
   const dataChains = chains.filter((c) => c.hasData);
   const chainMeta = Object.fromEntries(chains.map((c) => [c.id, c]));
   const max = Math.max(...totals.map((t) => t.total), 1);
+  // Full-basket winner only when 2+ chains carry everything; otherwise the common-products comparison.
+  const showFull = Boolean(priciest) || (cheapest && !basket.common);
   const splitSaving = cheapest && splitComplete ? Math.round((cheapest.total - splitTotal) * 100) / 100 : 0;
 
   return (
     <div className="space-y-4">
       {/* Hero */}
-      {cheapest ? (
+      {showFull ? (
         <div className="relative overflow-hidden rounded-3xl bg-gradient-to-bl from-emerald-500 via-emerald-600 to-teal-700 p-5 text-white shadow-xl shadow-emerald-700/20 animate-fade-up">
           <div className="pointer-events-none absolute -left-10 -top-10 h-40 w-40 rounded-full bg-white/10" />
           <div className="relative">
@@ -49,6 +52,32 @@ export default function CompareView({ prices, goList, goShop }) {
             )}
             <div className="mt-2 text-xs text-emerald-50/80">
               {linkedCount} מוצרים עם מחיר אמיתי{unlinked.length > 0 && ` · ${unlinked.length} ללא מוצר מקושר`}
+            </div>
+          </div>
+        </div>
+      ) : basket.common ? (
+        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-bl from-emerald-500 via-emerald-600 to-teal-700 p-5 text-white shadow-xl shadow-emerald-700/20 animate-fade-up" data-testid="common-hero">
+          <div className="pointer-events-none absolute -left-10 -top-10 h-40 w-40 rounded-full bg-white/10" />
+          <div className="relative">
+            <div className="flex items-center gap-2 text-sm text-emerald-50/90">
+              <Trophy className="h-4 w-4" /> הזולה ביותר על {basket.common.count} מוצרים שנמכרים בכל הרשתות
+            </div>
+            <div className="mt-1 text-3xl font-extrabold tracking-tight">{CHAIN_BY_ID[basket.common.cheapest.chainId].name}</div>
+            <div className="mt-1 text-4xl font-black"><Price value={basket.common.cheapest.total} /></div>
+            {basket.common.savings > 0 && (
+              <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1 text-sm font-semibold backdrop-blur">
+                חיסכון של <Price value={basket.common.savings} /> לעומת {CHAIN_BY_ID[basket.common.priciest.chainId].name}
+              </div>
+            )}
+            <div className="mt-2 text-xs text-emerald-50/80">
+              {linkedCount - basket.common.count} מוצרים אחרים בסל לא נמכרים בכל הרשתות (למשל ירקות, בשר ומותג פרטי עם ברקוד של הרשת) ולא נכללו בסכום הזה.
+            </div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {basket.common.totals.map((t) => (
+                <span key={t.chainId} className="rounded-full bg-white/15 px-2 py-0.5 text-xs">
+                  {CHAIN_BY_ID[t.chainId].short}: <Price value={t.total} />
+                </span>
+              ))}
             </div>
           </div>
         </div>
