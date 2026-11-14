@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { CheckCheck, ChevronDown, Eye, EyeOff, PartyPopper, ShoppingCart } from 'lucide-react';
 import { CATEGORIES } from '../data/categories.js';
 import { CHAIN_BY_ID } from '../data/chains.js';
-import { PRODUCT_BY_ID } from '../data/products.mock.js';
+import { lookupProduct } from '../services/customProducts.js';
 import { useShopping } from '../store/ShoppingContext.jsx';
 import { fmtQty } from '../utils/format.js';
 import { Button, CategoryIcon, Checkbox, EmptyState, Price } from './ui.jsx';
@@ -109,7 +109,7 @@ export default function ShopView({ prices, toast, goList }) {
             {isOpen && (
               <ul className="divide-y divide-slate-100 dark:divide-slate-800">
                 {visible.map((item) => {
-                  const product = item.productId ? PRODUCT_BY_ID[item.productId] : null;
+                  const product = lookupProduct(item.productId);
                   return (
                     <li key={item.id}>
                       <div role="button" tabIndex={0} onClick={() => shop.toggle(item.id)}

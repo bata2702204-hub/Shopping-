@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
-import { Plus, Sparkles } from 'lucide-react';
-import { searchProducts } from '../services/categorizer.js';
+import { Plus, PlusCircle, Sparkles } from 'lucide-react';
+import { categorize, searchProducts } from '../services/categorizer.js';
+import { estimatePrices } from '../services/customProducts.js';
+import { normalize } from '../services/hebrew.js';
 import { parseQuickAdd } from '../utils/format.js';
 import { getCategory } from '../data/categories.js';
 import { CategoryBadge, Price } from './ui.jsx';
@@ -23,6 +25,17 @@ export default function QuickAdd({ onAdd }) {
   // Suggest on the last comma-separated chunk only.
   const lastChunk = text.split(',').pop().trim();
   const suggestions = useMemo(() => (focused ? searchProducts(lastChunk, 10) : []), [lastChunk, focused]);
+
+  // Fallback row: add exactly what was typed as a new product (auto department + estimated price).
+  const create = useMemo(() => {
+    const typed = parseQuickAdd(lastChunk)[0]?.name || '';
+    if (!focused || normalize(typed).length < 2) return null;
+    if (suggestions.some((r) => normalize(r.product.name) === normalize(typed))) return null;
+    const { category, product } = categorize(typed);
+    if (product && suggestions.some((r) => r.product.id === product.id)) return null; // already listed above
+    const prices = product ? product.prices : estimatePrices(category);
+    return { name: typed, category, linked: product, min: Math.min(...Object.values(prices)) };
+  }, [lastChunk, focused, suggestions]);
 
   const submit = (raw = text) => {
     const entries = parseQuickAdd(raw);
@@ -69,11 +82,12 @@ export default function QuickAdd({ onAdd }) {
         </button>
       </form>
 
-      {suggestions.length > 0 && (
+      {(suggestions.length > 0 || create) && (
         <ul className="card absolute inset-x-0 top-full z-30 mt-2 max-h-[55vh] overflow-y-auto overscroll-contain p-1 animate-slide-in" role="listbox">
           {suggestions.map(({ product: p, via }) => {
             const min = Math.min(...Object.values(p.prices));
-            const hint = via === 'brand' ? `מותג: ${matchedBrand(p, lastChunk) || p.brands[0]}`
+            const hint = via === 'custom' ? 'מוצר שלך'
+              : via === 'brand' ? `מותג: ${matchedBrand(p, lastChunk) || p.brands[0]}`
               : via === 'fuzzy' ? 'התכוונת ל…?'
                 : via === 'alias' ? matchedAlias(p, lastChunk)
                   : null;
@@ -100,6 +114,25 @@ export default function QuickAdd({ onAdd }) {
               </li>
             );
           })}
+          {create && (
+            <li className={suggestions.length ? 'mt-1 border-t border-slate-100 pt-1 dark:border-slate-800' : ''}>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => submit()}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-start transition hover:bg-emerald-50 dark:hover:bg-emerald-500/10"
+              >
+                <PlusCircle className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">הוסף "{create.name}"</span>
+                  <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                    {create.linked ? `יזוהה כ: ${create.linked.name}` : 'מוצר חדש'} · ≈ <Price value={create.min} />{!create.linked && ' משוער'}
+                  </span>
+                </span>
+                <CategoryBadge id={create.category} />
+              </button>
+            </li>
+          )}
         </ul>
       )}
 

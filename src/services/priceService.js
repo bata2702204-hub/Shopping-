@@ -17,7 +17,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { CHAINS } from '../data/chains.js';
-import { PRODUCTS, PRODUCT_BY_ID } from '../data/products.mock.js';
+import { PRODUCTS } from '../data/products.mock.js';
+import { lookupProduct } from './customProducts.js';
 
 const round2 = (n) => Math.round(n * 100) / 100;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -51,8 +52,9 @@ export class MockPriceProvider {
   }
 
   async getQuote(item) {
-    const product = item.productId ? PRODUCT_BY_ID[item.productId] : null;
-    if (product) return { prices: { ...product.prices }, estimated: false, productName: product.name };
+    const product = lookupProduct(item.productId);
+    // Custom products carry an estimated (department median) price.
+    if (product) return { prices: { ...product.prices }, estimated: Boolean(product.custom), productName: product.name };
     return { prices: { ...(CATEGORY_AVG[item.category] || CATEGORY_AVG.other) }, estimated: true };
   }
 

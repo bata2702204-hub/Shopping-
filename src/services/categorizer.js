@@ -13,6 +13,7 @@
 import { PRODUCTS } from '../data/products.mock.js';
 import { CATEGORY_BY_ID } from '../data/categories.js';
 import { normalize, phraseKey, containsPhrase, editDistance } from './hebrew.js';
+import { getCustomProducts, customVersion, findCustomByName } from './customProducts.js';
 
 // ── Exact-ish matching index for categorization ──────────────────────────────
 const LABEL_INDEX = PRODUCTS.flatMap((product) => [
@@ -94,7 +95,7 @@ export function categoryFromSubcategory(text) {
 // ── Fuzzy search ──────────────────────────────────────────────────────────────
 const WEIGHT = { name: 1, alias: 0.92, brand: 0.8, sub: 0.7, category: 0.5 };
 
-const SEARCH_INDEX = PRODUCTS.map((product, order) => {
+function buildEntry(product, order) {
   const fields = [
     { kind: 'name', text: product.name },
     ...product.aliases.map((text) => ({ kind: 'alias', text })),
@@ -102,10 +103,26 @@ const SEARCH_INDEX = PRODUCTS.map((product, order) => {
     { kind: 'sub', text: product.sub },
     { kind: 'category', text: CATEGORY_BY_ID[product.category]?.name || '' },
   ].map((f) => ({ ...f, norm: normalize(f.text), stem: phraseKey(f.text), w: WEIGHT[f.kind] }));
-  const words = new Set();
-  fields.filter((f) => f.kind !== 'category').forEach((f) => f.norm.split(' ').forEach((w) => w.length >= 3 && words.add(w)));
+  // Words for typo matching, keeping the strongest field weight each word appears in.
+  const words = new Map();
+  fields.filter((f) => f.kind !== 'category' && f.kind !== 'sub').forEach((f) => f.norm.split(' ').forEach((w) => {
+    if (w.length >= 3 && (words.get(w) || 0) < f.w) words.set(w, f.w);
+  }));
   return { product, order, fields, words: [...words] };
-});
+}
+
+const SEARCH_INDEX = PRODUCTS.map(buildEntry);
+
+// The user's own products (fallback-created) are searchable too; their index is rebuilt on change.
+let customIndex = { key: null, entries: [] };
+function customEntries() {
+  const list = getCustomProducts();
+  const key = `${customVersion()}:${list.length}`;
+  if (customIndex.key !== key) {
+    customIndex = { key, entries: list.map((p, i) => buildEntry(p, PRODUCTS.length + i)) };
+  }
+  return customIndex.entries;
+}
 
 function textScore(field, q) {
   if (field === q) return 100;
@@ -125,20 +142,26 @@ function scoreTerm(entry, q, qStem) {
       if (f.stem === qStem) s = 85;
       else if (qStem.length >= 4 && (f.stem.startsWith(qStem) || f.stem.includes(` ${qStem}`))) s = 65;
     }
-    s *= f.w;
+    // Exact brand ("גו", "פרו", "תלמה") ranks right under an exact product name.
+    if (f.kind === 'brand' && f.norm === q) s = 97;
+    else s *= f.w;
     if (s > score) { score = s; via = f.kind; }
   }
   return { score, via };
 }
 
-/** Typo tolerance: 1 edit for 4–6 letters, 2 for 7+; also tolerant prefixes while still typing. */
+/**
+ * Typo tolerance: 1 edit for 4–6 letters, 2 for 7+; also tolerant prefixes while still typing.
+ * Fewer edits and stronger fields (name > alias > brand) score higher.
+ */
 function fuzzyTerm(entry, q) {
   if (q.length < 4) return 0;
   const max = q.length >= 7 ? 2 : 1;
   let best = 0;
-  for (const w of entry.words) {
-    if (editDistance(w, q, max) <= max) best = Math.max(best, 45);
-    else if (w.length > q.length && editDistance(w.slice(0, q.length), q, 1) <= 1) best = Math.max(best, 35);
+  for (const [w, weight] of entry.words) {
+    const d = editDistance(w, q, max);
+    if (d <= max) best = Math.max(best, (d <= 1 ? 48 : 40) * weight);
+    else if (w.length > q.length && editDistance(w.slice(0, q.length), q, 1) <= 1) best = Math.max(best, 35 * weight);
   }
   return best;
 }
@@ -151,7 +174,7 @@ export function searchProducts(query, limit = 8) {
   const tokens = q.split(' ').filter((t) => t.length >= 2);
 
   const results = [];
-  for (const entry of SEARCH_INDEX) {
+  for (const entry of [...SEARCH_INDEX, ...customEntries()]) {
     let { score, via } = scoreTerm(entry, q, qStem);
 
     if (!score && tokens.length > 1) {
@@ -172,7 +195,7 @@ export function searchProducts(query, limit = 8) {
       score = fuzzyTerm(entry, q);
       if (score) via = 'fuzzy';
     }
-    if (score) results.push({ product: entry.product, score, via, order: entry.order });
+    if (score) results.push({ product: entry.product, score, via: entry.product.custom ? 'custom' : via, order: entry.order });
   }
 
   // Typo matches only fill in when there's nothing solid.
@@ -194,6 +217,11 @@ export function categorize(text) {
   // A keyword like "קפוא" overrides a fresh-product match ("חזה עוף קפוא" → frozen).
   if (product && product.category !== 'frozen' && keywordCat === 'frozen') return { category: 'frozen', product };
   if (product) return { category: product.category, product };
+
+  // Something the user added before (a custom product) keeps its department and price.
+  const custom = findCustomByName(text);
+  if (custom) return { category: custom.category, product: custom };
+
   if (keywordCat !== 'other') return { category: keywordCat, product: null };
 
   const subCat = categoryFromSubcategory(text);
@@ -204,7 +232,7 @@ export function categorize(text) {
   const q = normalize(text);
   // Short inputs need an exact name/alias hit ("ספר" must not become "ספריי").
   const strongEnough = q.length >= 4 ? top?.score >= 60 : top?.score >= 92;
-  if (top && (strongEnough || (top.via === 'fuzzy' && q.length >= 5))) {
+  if (top && !top.product.custom && (strongEnough || (top.via === 'fuzzy' && q.length >= 5))) {
     return { category: top.product.category, product: top.score >= 80 || top.via === 'fuzzy' ? top.product : null };
   }
   return { category: 'other', product: null };

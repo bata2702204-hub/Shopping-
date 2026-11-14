@@ -30,7 +30,8 @@ for (const [input, expected] of Object.entries(cases)) {
 
 test('product match picks catalog item', () => {
   assert.equal(categorize('חלב').product.id, 'milk');
-  assert.equal(categorize('עגבניות שרי').product.id, 'tomato');
+  assert.equal(categorize('עגבניות').product.id, 'tomato');
+  assert.equal(categorize('עגבניות שרי').product.id, 'cherry-tomato');
   assert.equal(categorize('פלפל שחור').product.id, 'black-pepper');
   assert.equal(categorize('כריות').product.id, 'krayot');
   assert.equal(categorize('קורנפלס').product.id, 'cornflakes');
@@ -70,4 +71,24 @@ test('short queries', () => {
   assert.deepEqual(suggest('ח'), []);
   const ids = suggest('חל').map((p) => p.id);
   assert.ok(ids.includes('milk') && ids.includes('challah'));
+});
+
+test('protein lines: GO / PRO / Yoplait / Müller', () => {
+  const top = (q, n = 6) => searchProducts(q, n).map((r) => r.product.id);
+  assert.ok(top('גו').slice(0, 6).every((id) => id.startsWith('go-')), top('גו').join());
+  assert.ok(top('פרו').slice(0, 5).every((id) => id.startsWith('pro-')), top('פרו').join());
+  assert.deepEqual(top('מעדן חלבון', 3).sort(), ['go-pudding', 'pro-pudding', 'protein-pudding-plant']);
+  assert.equal(top('יופלה פרו')[0], 'pro-yogurt');
+  assert.equal(top('מעדן גו')[0], 'go-pudding');
+  assert.deepEqual(top('מולר', 2).sort(), ['muller-protein', 'muller-rice']);
+  assert.ok(top('חטיף חלבון').includes('go-bar') && top('חטיף חלבון').includes('pro-bar'));
+  assert.equal(categorize('גו').category, 'dairy');
+  assert.equal(categorize('יופלה פרו').product.id, 'pro-yogurt');
+});
+
+test('common products that used to be missing are found', () => {
+  for (const [q, id] of [['קרמבו', 'krembo'], ['פסק זמן', 'pesek-zman'], ['ספרייט', 'sprite'], ['זירו', 'coke-zero'],
+    ['במיה', 'okra'], ['מצה', 'matzah'], ['פחמים', 'charcoal'], ['אקמול', 'painkillers'], ['שמרים', 'yeast'], ['ערק', 'arak']]) {
+    assert.equal(suggest(q)[0]?.id, id, q);
+  }
 });

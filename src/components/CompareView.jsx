@@ -176,7 +176,8 @@ export default function CompareView({ prices, goList, goShop }) {
       <p className="flex items-start gap-2 px-1 text-xs text-slate-400">
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         המחירים הם הדמיה ריאלית לצורך השוואה ואינם מחירים עדכניים מהרשתות.
-        {basket.estimatedCount > 0 && ` ${basket.estimatedCount} מוצרים שאינם בקטלוג תומחרו לפי ממוצע המחלקה.`}
+        {basket.estimatedCount === 1 && ' מוצר אחד שאינו בקטלוג תומחר לפי מחיר טיפוסי במחלקה שלו.'}
+        {basket.estimatedCount > 1 && ` ${basket.estimatedCount} מוצרים שאינם בקטלוג תומחרו לפי מחיר טיפוסי במחלקה שלהם.`}
       </p>
     </div>
   );

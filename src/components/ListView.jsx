@@ -2,9 +2,9 @@ import { useMemo, useState } from 'react';
 import { ChevronLeft, ClipboardList, Pencil, RotateCcw, Trash2, TrendingDown, Wand2 } from 'lucide-react';
 import { CATEGORIES, getCategory } from '../data/categories.js';
 import { CHAIN_BY_ID } from '../data/chains.js';
-import { PRODUCT_BY_ID } from '../data/products.mock.js';
+import { lookupProduct } from '../services/customProducts.js';
 import { categorize } from '../services/categorizer.js';
-import { SAMPLE_LIST, useShopping } from '../store/ShoppingContext.jsx';
+import { SAMPLE_LIST, resolveProduct, useShopping } from '../store/ShoppingContext.jsx';
 import QuickAdd from './QuickAdd.jsx';
 import { Button, CategoryBadge, CategoryIcon, Checkbox, EmptyState, Price, Sheet, Stepper } from './ui.jsx';
 
@@ -111,7 +111,7 @@ export default function ListView({ prices, toast, goCompare }) {
 }
 
 function ItemRow({ item, quote, best, onToggle, onQty, onEdit, onDelete }) {
-  const product = item.productId ? PRODUCT_BY_ID[item.productId] : null;
+  const product = lookupProduct(item.productId);
   return (
     <li
       className={`flex items-center gap-3 px-3 py-3 transition-colors duration-300 animate-slide-in ${
@@ -169,8 +169,9 @@ function EditForm({ item, onSave }) {
   const save = (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    const { product } = categorize(name);
-    onSave({ name: name.trim(), qty: Number(qty) > 0 ? Number(qty) : 1, category, productId: product?.id || null });
+    // Unknown names become (or update) a custom product priced for the chosen department.
+    const { product } = resolveProduct(name.trim(), category);
+    onSave({ name: name.trim(), qty: Number(qty) > 0 ? Number(qty) : 1, category, productId: product.id });
   };
 
   return (

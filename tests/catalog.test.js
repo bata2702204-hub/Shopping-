@@ -4,8 +4,8 @@ import { PRODUCTS } from '../src/data/products.mock.js';
 import { CHAINS } from '../src/data/chains.js';
 import { CATEGORY_BY_ID } from '../src/data/categories.js';
 
-test('catalog has 250+ products across all departments', () => {
-  assert.ok(PRODUCTS.length >= 250, `only ${PRODUCTS.length}`);
+test('catalog has 550+ products across all departments', () => {
+  assert.ok(PRODUCTS.length >= 550, `only ${PRODUCTS.length}`);
   for (const cat of ['produce', 'bakery', 'meat', 'dairy', 'pantry', 'cleaning', 'frozen']) {
     assert.ok(PRODUCTS.some((p) => p.category === cat), cat);
   }

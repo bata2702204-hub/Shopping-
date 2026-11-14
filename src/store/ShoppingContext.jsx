@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer } from 'react';
 import { categorize } from '../services/categorizer.js';
+import { upsertCustomProduct } from '../services/customProducts.js';
 import { normalize } from '../services/hebrew.js';
 import { uid } from '../utils/format.js';
 
@@ -18,10 +19,21 @@ function load() {
   }
 }
 
-/** Build an item from free text: auto-categorized and linked to a catalog product when possible. */
+/**
+ * Resolve free text to { category, product }. Unknown names become a custom product
+ * (keyword-detected department + estimated department price), so every item can be priced.
+ */
+export function resolveProduct(name, categoryOverride) {
+  const { category: detected, product } = categorize(name);
+  const category = categoryOverride || detected;
+  if (product && !product.custom) return { category, product };
+  return { category, product: upsertCustomProduct(name, category) };
+}
+
+/** Build an item from free text: auto-categorized and always linked to a product. */
 export function makeItem(name, qty = 1) {
-  const { category, product } = categorize(name);
-  return { id: uid(), name: name.trim(), qty, category, productId: product?.id || null, checked: false, addedAt: Date.now() };
+  const { category, product } = resolveProduct(name);
+  return { id: uid(), name: name.trim(), qty, category, productId: product.id, checked: false, addedAt: Date.now() };
 }
 
 const sameItem = (a, b) =>
