@@ -30,8 +30,8 @@ GitHub Action (כל יום 06:00 שעון ישראל, או הרצה ידנית)
 | רמי לוי | url.publishedprices.co.il, משתמש אורח `RamiLevi` | רמת החייל (055) | ✅ בענן, כשהמשתנה מוגדר |
 | יוחננוף | url.publishedprices.co.il, משתמש אורח `yohananof` | מודיעין ישפרו (017) | ✅ בענן, כשהמשתנה מוגדר |
 | טיב טעם | url.publishedprices.co.il, משתמש אורח `TivTaam` | ראשון מזרח (014) | ✅ בענן, כשהמשתנה מוגדר |
-| קרפור | prices.carrefour.co.il | — | 🏠 מהמחשב בבית (חסום מחוץ לישראל) — ראו למטה |
-| ויקטורי | — | — | ⏸️ אין עדיין מקור מאומת |
+| קרפור | prices.carrefour.co.il (קוד רשת 7290055700007) | — | 🏠 מהמחשב בבית (חסום מחוץ לישראל) — ראו למטה |
+| ויקטורי | laibcatalog.co.il (פורטל משותף לכמה רשתות) | החדש ביותר | 🏠 מהמחשב בבית (חסום מחוץ לישראל) — ראו למטה |
 
 ### הפעלת רמי לוי, יוחננוף וטיב טעם בענן
 ב-GitHub, במאגר `Shopping-`:
@@ -42,25 +42,28 @@ GitHub Action (כל יום 06:00 שעון ישראל, או הרצה ידנית)
 
 אין צורך לשנות קוד — ה-workflow מעביר את המשתנה לסקריפט (`.github/workflows/daily-prices.yml`).
 
-### קרפור מהמחשב בבית
-הפורטל של קרפור חוסם חיבורים מחוץ לישראל, ולכן מריצים אותו מהמחשב שלכם (IP ישראלי):
+### קרפור וויקטורי מהמחשב בבית
+הפורטלים של קרפור וויקטורי חוסמים חיבורים מחוץ לישראל, ולכן מריצים אותם מהמחשב שלכם (IP ישראלי):
 ```bash
 git clone https://github.com/bata2702204-hub/Shopping-.git && cd Shopping-
 pip install requests lxml
-python scripts/update_carrefour_local.py --no-push   # ניסיון ראשון בלי לדחוף
-python scripts/update_carrefour_local.py             # מעדכן ודוחף
+python scripts/update_local.py --no-push   # ניסיון בלי לדחוף (קרפור + ויקטורי)
+python scripts/update_local.py             # מעדכן ודוחף
+python scripts/update_local.py --chains victory   # רק רשת אחת
 ```
-הסקריפט מושך מ-GitHub את הנתונים האחרונים, מעדכן **רק** את מחירי קרפור, ודוחף. אם ההורדה נכשלת – לא משתנה כלום.
+הסקריפט מושך מ-GitHub את הנתונים האחרונים, מעדכן **רק** את הרשתות האלה, ודוחף. אם אף רשת לא ירדה – לא משתנה כלום;
+רשת שנכשלה שומרת את המחירים האמיתיים הקודמים שלה. (`update_carrefour_local.py` עדיין עובד – רק לקרפור.)
 Node.js אופציונלי (אם מותקן – מסווג את המוצרים החדשים מיד; אחרת זה קורה בהרצה הבאה בענן).
-ההרצה היומית בענן שומרת את מחירי קרפור האחרונים ומציגה "עודכן <תאריך> (הרצה מקומית)".
+ההרצה היומית בענן שומרת את המחירים האחרונים של שתיהן ומציגה "עודכן <תאריך> (הרצה מקומית)".
+לויקטורי: קוד הרשת שבקוד (7290696200003) עוד לא אומת – אם הוא שגוי, ההרצה תציג את קודי הרשתות שנמצאו בפורטל.
 
 הרצה יומית אוטומטית:
 - **Windows** – Task Scheduler ← Create Basic Task ← Daily, 07:00 ← Start a program:
-  `python` עם הארגומנט `scripts\update_carrefour_local.py` ו-"Start in" = תיקיית המאגר.
+  `python` עם הארגומנט `scripts\update_local.py` ו-"Start in" = תיקיית המאגר.
 - **Mac/Linux** – `crontab -e` והוספת השורה:
-  `0 7 * * * cd /path/to/Shopping- && python3 scripts/update_carrefour_local.py >> carrefour.log 2>&1`
+  `0 7 * * * cd /path/to/Shopping- && python3 scripts/update_local.py >> local-prices.log 2>&1`
 
-אם קרפור מעבירה את הקבצים לכתובת אחרת: `python scripts/update_carrefour_local.py --url https://...`
+אם רשת מעבירה את הקבצים לכתובת אחרת: `python scripts/update_local.py --url victory=https://...`
 
 ### השוואת ירקות, פירות ובשר (התאמה לפי שם)
 לירקות, פירות ובשר יש ברקוד פנימי שונה בכל רשת, ולכן הם מושווים לפי שם: עבור רשימה מוגדרת של מוצרים בסיסיים
@@ -89,7 +92,7 @@ Settings ← Pages ← Deploy from a branch ← `main` / `/docs`.
 
 ## מבנה הקוד
 ```
-scripts/       fetch_real_prices.py, enrich_prices.mjs, fresh_matching.mjs, update_carrefour_local.py
+scripts/       fetch_real_prices.py, enrich_prices.mjs, fresh_matching.mjs, update_local.py
 public/        real_prices.json (נוצר אוטומטית)
 src/
   services/    priceService.js  ← טוען את real_prices.json, quoteFor, computeBasket (מחירים אמיתיים בלבד)

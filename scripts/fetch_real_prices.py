@@ -77,8 +77,14 @@ CHAINS: list[ChainConfig] = [
     ChainConfig("tivTaam", "טיב טעם", "cerberus", username="TivTaam", expected_code="7290873255550",
                 store_id="014"),   # ראשון מזרח
     # No verified source yet. Add the chain's published guest user here to enable it.
-    ChainConfig("victory", "ויקטורי", "cerberus", username=None,
-                disabled="no verified guest user / file address for Victory yet"),
+    # Victory publishes on laibcatalog.co.il (a listing shared by several chains), which blocks access
+    # from outside Israel → fetched from a PC in Israel with scripts/update_local.py. chain_code selects
+    # Victory's files on that shared listing; it's from memory, not yet verified — if no file matches,
+    # the error lists the chain codes that ARE there.
+    ChainConfig("victory", "ויקטורי", "listing", local_only=True, chain_code="7290696200003",
+                urls=os.environ.get("VICTORY_URLS", "").split() or
+                ["https://laibcatalog.co.il/", "http://laibcatalog.co.il/"],
+                disabled="portal blocks connections from outside Israel — run scripts/update_local.py from Israel"),
     # prices.carrefour.co.il refuses connections from outside Israel (GitHub runners included), so
     # Carrefour is fetched from a PC in Israel: scripts/update_carrefour_local.py. Its ChainId is read
     # from its own file (7290058140886 is Rami Levy's code, verified from Rami Levy's files).
@@ -124,7 +130,7 @@ FILE_TS = re.compile(r"-(\d{8})(\d{4})?(?:\d{2})?[^\d]*$")
 
 def file_time(name: str) -> str | None:
     """PriceFull7290027600007-002-123-20261114-030000.gz → 2026-11-14T03:00:00"""
-    base = re.sub(r"\.(gz|xml|zip)$", "", name.split("?")[0].rsplit("/", 1)[-1], flags=re.I)
+    base = re.sub(r"(\.(gz|xml|zip))+$", "", name.split("?")[0].rsplit("/", 1)[-1], flags=re.I)  # .xml.gz too
     m = re.search(r"(\d{8})-?(\d{4,6})?$", base)
     if not m:
         return None
@@ -236,7 +242,12 @@ def fetch_listing(cfg: ChainConfig) -> tuple[bytes, dict]:
                     if re.search(r"pricefull", n, re.I) and re.search(r"\.(gz|xml|zip)$", n, re.I):
                         files.append(base + n)
             if cfg.chain_code:
+                # Shared listings (several chains): keep only this chain's files, never fall back to others.
+                seen = sorted({m for h in files for m in re.findall(r"PriceFull(\d{13})", h, re.I)})
                 files = [h for h in files if cfg.chain_code in h]
+                if not files and seen:
+                    raise RuntimeError(f"no PriceFull files for chain {cfg.chain_code}; chain codes on this page: "
+                                       f"{', '.join(seen)} — set chain_code in scripts/fetch_real_prices.py")
             if cfg.store_id:
                 files = [h for h in files if f"-{cfg.store_id.zfill(3)}-" in h] or files
             if not files:
@@ -338,6 +349,7 @@ def run(only: list[str] | None, out: Path, merge: bool = False) -> int:
     prev_meta = {m["id"]: m for m in previous.get("chains", [])}
     results: dict[str, dict] = {}
     chain_meta: list[dict] = []
+    fetched_now: list[str] = []
 
     for cfg in CHAINS:
         requested = bool(only) and cfg.id in only
@@ -372,6 +384,7 @@ def run(only: list[str] | None, out: Path, merge: bool = False) -> int:
             if cfg.expected_code and code and code != cfg.expected_code:
                 print(f"[warn]  {cfg.id:10} ChainId in file is {code}, expected {cfg.expected_code}", file=sys.stderr)
             results[cfg.id] = items
+            fetched_now.append(cfg.id)
             chain_meta.append({
                 "id": cfg.id, "name": cfg.name, "status": "ok",
                 **({"reason": "local"} if cfg.local_only else {}),
@@ -442,8 +455,7 @@ def run(only: list[str] | None, out: Path, merge: bool = False) -> int:
     }
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    ok = [m["id"] for m in chain_meta if m.get("status") == "ok"]
-    print(f"wrote {out} — {len(products)} products, fetched now: {', '.join(ok) or 'none'}")
+    print(f"wrote {out} — {len(products)} products, fetched now: {', '.join(fetched_now) or 'none'}")
     return 0
 
 
