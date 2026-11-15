@@ -7,10 +7,17 @@ import { Button, CategoryIcon, EmptyState, Price } from './ui.jsx';
 
 /** Why a chain has no prices today, in plain Hebrew. */
 function chainStatusText(c) {
-  if (c.status === 'stale') return `נתונים מ-${fmtUpdated(c.fileTime)} (העדכון היומי נכשל)`;
+  const when = c.fileTime ? fmtUpdated(c.fileTime) : '';
+  if (c.reason === 'local' && c.hasData) return `עודכן ${when} (הרצה מקומית)`;
   if (c.status === 'ok') return null;
+  if (c.reason === 'needs-variable') {
+    return c.hasData
+      ? `נתונים מ-${when} · העדכון האוטומטי ממתין להגדרת משתנה בסביבה`
+      : 'אין מידע — העדכון האוטומטי ממתין להגדרת משתנה בסביבה';
+  }
+  if (c.status === 'stale') return `נתונים מ-${when} (העדכון האחרון לא הצליח)`;
   if (c.status === 'disabled') return 'אין מידע — לא זמין כרגע';
-  return 'אין מידע — קובץ המחירים של הרשת לא נאסף היום';
+  return 'אין מידע — קובץ המחירים של הרשת לא נאסף';
 }
 
 export default function CompareView({ prices, goList, goShop }) {
@@ -204,7 +211,17 @@ export default function CompareView({ prices, goList, goShop }) {
                             <CategoryIcon id={item.category} className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                             <span className="truncate">{q.product.name}</span>
                             <span className="shrink-0 text-[11px] font-normal text-slate-400">×{fmtQty(item.qty)}</span>
+                            {q.product.fresh && <span className="chip shrink-0 bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">השוואה לפי שם</span>}
                           </div>
+                          {q.product.fresh && (
+                            <div className="mt-0.5 text-[10px] leading-snug text-slate-400" data-testid="fresh-matched">
+                              {Object.entries(q.product.matched).map(([cid, m]) => (
+                                <span key={cid} className="me-2 inline-block">
+                                  {CHAIN_BY_ID[cid].short}: "{m.name}"{m.suspect && <b className="text-amber-600"> · מחיר חריג, לא נכלל</b>}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </td>
                       </tr>
                       <tr>

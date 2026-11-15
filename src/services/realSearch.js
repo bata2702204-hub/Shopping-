@@ -65,7 +65,8 @@ function rank(db, query, q, minDictScore, limit) {
     }
     if (!direct && !expanded) continue;
     // Matching both ways (and being tagged with that entry) beats matching one way.
-    const score = Math.max(direct, expanded) + (direct && expanded ? 2 : 0) + (tagged ? 1 : 0);
+    // Name-matched fresh groups compare across chains, so they lead their own search ("עגבניה").
+    const score = Math.max(direct, expanded) + (direct && expanded ? 2 : 0) + (tagged ? 1 : 0) + (p.fresh ? 5 : 0);
     results.push({ product: p, score, via: expanded > direct ? 'dictionary' : 'name' });
   }
 

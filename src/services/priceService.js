@@ -11,7 +11,7 @@ import { CHAINS } from '../data/chains.js';
 import { normalize } from './hebrew.js';
 
 const round2 = (n) => Math.round(n * 100) / 100;
-const OK = new Set(['ok', 'stale']);
+const OK = new Set(['ok', 'stale', 'local']); // local = fetched from a PC in Israel (Carrefour)
 
 /** Turn the compact JSON into a usable in-memory database. */
 export function parseRealPrices(json) {
@@ -50,6 +50,41 @@ export function parseRealPrices(json) {
       nameNorm: normalize(name),
     };
   });
+
+  // Name-matched fresh groups (produce/meat): each chain's own plain per-kg item, matched by name in
+  // scripts/fresh_matching.mjs. Prices are those real items' prices; a chain flagged "suspect" (far from
+  // the others) is shown but left out of the comparison.
+  const byKey = new Map(products.map((p) => [p.barcode, p]));
+  for (const g of json.freshGroups || []) {
+    const matched = {};
+    const prices = Object.fromEntries(CHAINS.map((c) => [c.id, null]));
+    for (const [cid, key] of Object.entries(g.members || {})) {
+      const real = byKey.get(String(key));
+      const price = real?.prices[cid];
+      if (price == null) continue;
+      matched[cid] = { name: real.name, barcode: real.barcode, price, suspect: (g.suspect || []).includes(cid) };
+      if (!matched[cid].suspect) prices[cid] = price;
+    }
+    const available = Object.values(prices).filter((v) => v != null);
+    if (available.length < 2) continue;
+    const name = `${g.name} (לק"ג)`;
+    products.unshift({
+      barcode: `fresh:${g.id}`,
+      name,
+      manufacturer: '',
+      unit: 'מחיר לק"ג',
+      weighted: true,
+      prices,
+      category: g.category || 'produce',
+      dictId: g.id,
+      chainCount: available.length,
+      minPrice: Math.min(...available),
+      norm: normalize(name),
+      nameNorm: normalize(g.name),
+      fresh: true,
+      matched,
+    });
+  }
 
   return {
     products,

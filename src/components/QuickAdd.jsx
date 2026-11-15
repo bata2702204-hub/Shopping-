@@ -101,7 +101,10 @@ export default function QuickAdd({ onAdd, db }) {
               >
                 <span className={`h-2 w-2 shrink-0 rounded-full ${getCategory(p.category).dot}`} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{p.name}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate font-medium">{p.name}</span>
+                    {p.fresh && <span className="chip shrink-0 bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">השוואה לפי שם</span>}
+                  </span>
                   <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
                     {[p.manufacturer, p.unit].filter(Boolean).join(' · ')}{(p.manufacturer || p.unit) && ' · '}<PriceHint product={p} />
                   </span>

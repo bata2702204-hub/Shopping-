@@ -62,6 +62,7 @@ class ChainConfig:
     chain_code: str | None = None   # only used to filter multi-chain listings
     expected_code: str | None = None  # ChainId the file should carry (verified); mismatch → warning
     disabled: str | None = None     # reason the chain isn't fetched (no verified source yet)
+    local_only: bool = False        # fetched from a PC in Israel (scripts/update_carrefour_local.py)
 
 
 CHAINS: list[ChainConfig] = [
@@ -69,15 +70,22 @@ CHAINS: list[ChainConfig] = [
     ChainConfig("shufersal", "שופרסל", "shufersal", store_id="123"),
     # Cerberus portal (url.publishedprices.co.il), each chain's public guest user, empty password.
     # Usernames and ChainIds verified by logging in and reading the files (14.11.2026).
-    ChainConfig("ramiLevy", "רמי לוי", "cerberus", username="RamiLevi", expected_code="7290058140886"),
-    ChainConfig("yochananof", "יוחננוף", "cerberus", username="yohananof", expected_code="7290803800003"),
-    ChainConfig("tivTaam", "טיב טעם", "cerberus", username="TivTaam", expected_code="7290873255550"),
+    ChainConfig("ramiLevy", "רמי לוי", "cerberus", username="RamiLevi", expected_code="7290058140886",
+                store_id="055"),   # רמת החייל — pinned so day-to-day prices are from the same store
+    ChainConfig("yochananof", "יוחננוף", "cerberus", username="yohananof", expected_code="7290803800003",
+                store_id="017"),   # מודיעין ישפרו
+    ChainConfig("tivTaam", "טיב טעם", "cerberus", username="TivTaam", expected_code="7290873255550",
+                store_id="014"),   # ראשון מזרח
     # No verified source yet. Add the chain's published guest user here to enable it.
     ChainConfig("victory", "ויקטורי", "cerberus", username=None,
                 disabled="no verified guest user / file address for Victory yet"),
-    # prices.carrefour.co.il refuses connections from outside Israel (GitHub runners included).
-    ChainConfig("carrefour", "קרפור", "listing", urls=["https://prices.carrefour.co.il/"],
-                disabled="portal blocks connections from outside Israel"),
+    # prices.carrefour.co.il refuses connections from outside Israel (GitHub runners included), so
+    # Carrefour is fetched from a PC in Israel: scripts/update_carrefour_local.py. Its ChainId is read
+    # from its own file (7290058140886 is Rami Levy's code, verified from Rami Levy's files).
+    ChainConfig("carrefour", "קרפור", "listing", local_only=True,
+                urls=os.environ.get("CARREFOUR_URLS", "").split() or
+                ["https://prices.carrefour.co.il/", "https://prices.ybitan.co.il/", "http://prices.ybitan.co.il/"],
+                disabled="portal blocks connections from outside Israel — run scripts/update_carrefour_local.py from Israel"),
 ]
 
 
@@ -167,13 +175,19 @@ def fetch_cerberus(cfg: ChainConfig) -> tuple[bytes, dict]:
     })
     listing.raise_for_status()
     files = [f for f in listing.json().get("aaData", []) if "pricefull" in f.get("fname", "").lower()]
-    if cfg.store_id:
-        files = [f for f in files if f"-{cfg.store_id.zfill(3)}-" in f["fname"]] or files
+    pinned = [f for f in files if cfg.store_id and f"-{cfg.store_id.zfill(3)}-" in f["fname"]]
     if not files:
         raise RuntimeError("no PriceFull files listed")
-    newest = max(file_time(f["fname"]) or "" for f in files)
-    candidates = [f for f in files if (file_time(f["fname"]) or "") >= newest[:10]]  # same day
-    pick = max(candidates, key=lambda f: int(f.get("size") or 0))           # biggest store that day
+    if pinned:
+        # The pinned store's newest file (a store can publish several a day; the latest is most current).
+        pick = max(pinned, key=lambda f: file_time(f["fname"]) or "")
+    else:
+        # Fallback: the biggest store among the newest day's files.
+        newest = max(file_time(f["fname"]) or "" for f in files)
+        candidates = [f for f in files if (file_time(f["fname"]) or "") >= newest[:10]]
+        pick = max(candidates, key=lambda f: int(f.get("size") or 0))
+        if cfg.store_id:
+            print(f"[warn]  {cfg.id:10} store {cfg.store_id} not listed today — using {pick['fname']}", file=sys.stderr)
     data = decompress(get(s, f"{base}/file/d/{pick['fname']}").content)
     meta = {"file": pick["fname"], "fileTime": file_time(pick["fname"])}
     store = re.search(r"-(\d{3,})-\d{8}", pick["fname"])
@@ -284,21 +298,59 @@ def _load_previous(path: Path) -> dict | None:
         return None
 
 
-def run(only: list[str] | None, out: Path) -> int:
+# Codes shorter than 8 digits, and 7290000000xxx, are store-internal (mostly produce & meat sold by
+# weight). The same internal code can mean different things in different chains, so those are never
+# merged across chains — they're kept per chain under "chainId:code".
+INTERNAL_CODE = re.compile(r"^(\d{1,7}|7290000000\d{3})$")
+
+
+def product_key(chain_id: str, code: str) -> str:
+    return f"{chain_id}:{code}" if INTERNAL_CODE.match(code) else code
+
+
+def _carry(previous: dict, cid: str) -> dict:
+    """Last real prices of one chain from the previous output (key → item)."""
+    order = previous.get("chainOrder", CHAIN_ORDER)
+    if cid not in order:
+        return {}
+    idx = order.index(cid)
+    carried = {}
+    for row in previous.get("products", []):
+        price = row[5][idx] if len(row) > 5 and idx < len(row[5]) else None
+        if price is not None:
+            carried[row[0]] = {"name": row[1], "manufacturer": row[2], "unit": row[3],
+                               "weighted": bool(row[4]), "price": price, "_key": row[0]}
+    return carried
+
+
+def run(only: list[str] | None, out: Path, merge: bool = False) -> int:
+    previous = _load_previous(out) or {}
+    prev_meta = {m["id"]: m for m in previous.get("chains", [])}
     results: dict[str, dict] = {}
-    chain_meta = []
+    chain_meta: list[dict] = []
+
     for cfg in CHAINS:
-        if only and cfg.id not in only:
-            chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "skipped"})
+        requested = bool(only) and cfg.id in only
+        if only and not requested:
+            # --merge keeps the other chains exactly as they were; otherwise they are just skipped.
+            pm = prev_meta.get(cfg.id)
+            if merge and pm:
+                carried = _carry(previous, cfg.id)
+                if carried:
+                    results[cfg.id] = carried
+                chain_meta.append(pm)
+            else:
+                chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "skipped"})
             continue
-        if cfg.disabled:
-            chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "disabled", "error": cfg.disabled})
+        if cfg.disabled and not requested:
+            reason = "local" if cfg.local_only else "disabled"
+            chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "disabled", "reason": reason, "error": cfg.disabled})
             print(f"[off]   {cfg.id:10} {cfg.disabled}")
             continue
-        if cfg.kind == "cerberus" and not PUBLISHEDPRICES_ENABLED:
-            chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "disabled",
+        if cfg.kind == "cerberus" and not PUBLISHEDPRICES_ENABLED and not requested:
+            chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "disabled", "reason": "needs-variable",
                                "error": "publishedprices login is off (set PUBLISHEDPRICES_ENABLED=true)"})
-            print(f"[off]   {cfg.id:10} publishedprices login disabled")
+            print(f"[off]   {cfg.id:10} publishedprices login disabled (PUBLISHEDPRICES_ENABLED)")
             continue
         t0 = time.time()
         try:
@@ -312,69 +364,76 @@ def run(only: list[str] | None, out: Path) -> int:
             results[cfg.id] = items
             chain_meta.append({
                 "id": cfg.id, "name": cfg.name, "status": "ok",
+                **({"reason": "local"} if cfg.local_only else {}),
                 "chainCode": header.get("chainid"), "storeId": header.get("storeid"),
                 "items": len(items), **meta,
             })
-            print(f"[ok]    {cfg.id:10} {len(items):6} items  {meta.get('file')}  ({time.time() - t0:.1f}s)")
+            print(f"[ok]    {cfg.id:10} {len(items):6} items  {meta.get('file')}  ChainId={code}  ({time.time() - t0:.1f}s)")
         except Exception as e:
-            chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "error", "error": str(e)[:300]})
+            reason = "local" if cfg.local_only else "failed"
+            chain_meta.append({"id": cfg.id, "name": cfg.name, "status": "error", "reason": reason, "error": str(e)[:300]})
             print(f"[error] {cfg.id:10} {e}", file=sys.stderr)
 
-    # A chain that failed today keeps its last real prices (status "stale", original file date),
-    # read from the previous output. Never estimated — just older real data, clearly dated.
-    previous = _load_previous(out)
-    if previous:
-        prev_meta = {m["id"]: m for m in previous.get("chains", [])}
-        order = previous.get("chainOrder", CHAIN_ORDER)
-        for i, meta in enumerate(chain_meta):
-            cid = meta["id"]
-            pm = prev_meta.get(cid)
-            if meta["status"] == "ok" or not pm or pm.get("status") not in ("ok", "stale") or cid not in order:
-                continue
-            idx = order.index(cid)
-            carried = {}
-            for row in previous.get("products", []):
-                price = row[5][idx] if len(row) > 5 and idx < len(row[5]) else None
-                if price is not None:
-                    carried[row[0]] = {"name": row[1], "manufacturer": row[2], "unit": row[3],
-                                       "weighted": bool(row[4]), "price": price}
-            if carried:
-                results[cid] = carried
-                chain_meta[i] = {**pm, "status": "stale", "error": meta.get("error"), "items": len(carried)}
-                print(f"[stale] {cid:10} kept {len(carried)} prices from {pm.get('fileTime')}")
+    # A chain not fetched this time keeps its last REAL prices, clearly dated (never estimated):
+    #   local-only chain (Carrefour) → status "local"; publishedprices waiting for the variable →
+    #   "stale"/needs-variable; a failed fetch → "stale"/failed.
+    for i, meta in enumerate(chain_meta):
+        cid = meta["id"]
+        pm = prev_meta.get(cid)
+        if meta["status"] in ("ok", "skipped") or cid in results or not pm \
+                or pm.get("status") not in ("ok", "stale", "local"):
+            continue
+        carried = _carry(previous, cid)
+        if not carried:
+            continue
+        results[cid] = carried
+        status = "local" if meta.get("reason") == "local" else "stale"
+        chain_meta[i] = {**pm, "status": status, "reason": meta.get("reason") or "failed",
+                         "error": meta.get("error"), "items": len(carried)}
+        print(f"[{status}] {cid:10} kept {len(carried)} real prices from {pm.get('fileTime')}")
 
     if not results:
         print("No chain could be fetched — keeping the previous file untouched.", file=sys.stderr)
         return 1
 
-    # Merge by barcode. The display name comes from the first chain (in CHAIN_ORDER) that has it.
+    # Merge by barcode (internal codes stay per chain). Display name: first chain in CHAIN_ORDER.
     merged: dict[str, dict] = {}
     for cid in CHAIN_ORDER:
         for code, it in results.get(cid, {}).items():
-            p = merged.setdefault(code, {**{k: it[k] for k in ("name", "manufacturer", "unit", "weighted")},
-                                         "prices": {c: None for c in CHAIN_ORDER}})
+            key = it.get("_key") or product_key(cid, code)
+            p = merged.setdefault(key, {**{k: it[k] for k in ("name", "manufacturer", "unit", "weighted")},
+                                        "prices": {c: None for c in CHAIN_ORDER}})
             p["prices"][cid] = it["price"]
 
+    # Keep existing department tags so a run without Node (home PC) doesn't lose them;
+    # scripts/enrich_prices.mjs recomputes them whenever it runs.
+    pf = previous.get("fields", [])
+    ic, idd = (pf.index("category") if "category" in pf else None), (pf.index("dictId") if "dictId" in pf else None)
+    tags = {row[0]: (row[ic] if ic is not None else None, row[idd] if idd is not None else None)
+            for row in previous.get("products", [])}
+
     products = [
-        [code, p["name"], p["manufacturer"], p["unit"], 1 if p["weighted"] else 0,
-         [p["prices"][c] for c in CHAIN_ORDER]]
-        for code, p in sorted(merged.items(), key=lambda kv: kv[1]["name"])
+        [key, p["name"], p["manufacturer"], p["unit"], 1 if p["weighted"] else 0,
+         [p["prices"][c] for c in CHAIN_ORDER], *tags.get(key, (None, None))]
+        for key, p in sorted(merged.items(), key=lambda kv: kv[1]["name"])
     ]
-    file_times = [m["fileTime"] for m in chain_meta if m.get("status") in ("ok", "stale") and m.get("fileTime")]
+    file_times = [m["fileTime"] for m in chain_meta if m.get("status") in ("ok", "stale", "local") and m.get("fileTime")]
     payload = {
-        "version": 1,
+        "version": 2,
         "source": "Israeli Food Act price-transparency files (PriceFull)",
         "lastUpdated": max(file_times) if file_times else None,
         "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "chainOrder": CHAIN_ORDER,
         "chains": chain_meta,
-        "fields": ["barcode", "name", "manufacturer", "unit", "weighted", "prices"],
+        "fields": ["barcode", "name", "manufacturer", "unit", "weighted", "prices", "category", "dictId"],
         "products": products,
+        # Name-matched fresh groups are rebuilt by scripts/enrich_prices.mjs; kept meanwhile.
+        "freshGroups": previous.get("freshGroups", []),
     }
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     ok = [m["id"] for m in chain_meta if m.get("status") == "ok"]
-    print(f"wrote {out} — {len(products)} products, chains ok: {', '.join(ok)}")
+    print(f"wrote {out} — {len(products)} products, fetched now: {', '.join(ok) or 'none'}")
     return 0
 
 
@@ -382,5 +441,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", nargs="*", help="chain ids to fetch (default: all)")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--merge", action="store_true",
+                    help="with --only: keep every other chain's data and status from the existing file")
     a = ap.parse_args()
-    sys.exit(run(a.only, a.out))
+    sys.exit(run(a.only, a.out, merge=a.merge))

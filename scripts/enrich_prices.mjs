@@ -5,6 +5,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { categorize } from '../src/services/categorizer.js';
+import { buildFreshGroups } from './fresh_matching.mjs';
 
 const file = fileURLToPath(new URL('../public/real_prices.json', import.meta.url));
 const data = JSON.parse(readFileSync(file, 'utf8'));
@@ -20,5 +21,9 @@ data.products = data.products.map((row) => {
 });
 data.fields = [...base, 'category', 'dictId'];
 
+// Fresh produce/meat: group the plain per-kg item of every chain by name (see fresh_matching.mjs).
+data.freshGroups = buildFreshGroups(data.products, data.chainOrder);
+
 writeFileSync(file, JSON.stringify(data));
 console.log(`enriched ${data.products.length} products in ${Date.now() - t0}ms`, counts);
+console.log(`fresh groups: ${data.freshGroups.length}`);

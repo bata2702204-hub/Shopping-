@@ -73,7 +73,7 @@ test('the shipped real_prices.json parses and has real data', () => {
   assert.ok(real.chains.filter((c) => c.hasData).length >= 2, 'expected 2+ chains with data');
   assert.ok(real.products.some((p) => p.chainCount >= 2));
   for (const p of real.products) {
-    assert.ok(/^\d+$/.test(p.barcode), p.barcode);
+    assert.ok(/^(([a-zA-Z]+:)?\d+|fresh:[a-z-]+)$/.test(p.barcode), p.barcode); // "chain:code" = chain-internal, "fresh:id" = name-matched group
     for (const v of Object.values(p.prices)) assert.ok(v === null || v > 0);
   }
 });
