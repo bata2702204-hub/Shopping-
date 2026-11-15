@@ -225,6 +225,16 @@ def fetch_listing(cfg: ChainConfig) -> tuple[bytes, dict]:
             page = get(s, url).text
             hrefs = [urljoin(url, html.unescape(h)) for h in re.findall(r'href="([^"]+)"', page, flags=re.I)]
             files = [h for h in hrefs if re.search(r"pricefull", h, re.I) and re.search(r"\.(gz|xml|zip)(\?|$)", h, re.I)]
+            # Carrefour's portal renders its listing from JS: `const path = 'YYYYMMDD'; const files = [{name,...}]`
+            # and links are origin/path/name — no <a href>s in the HTML.
+            mp = re.search(r"const\s+path\s*=\s*'([^']*)'", page)
+            mf = re.search(r"const\s+files\s*=\s*(\[.*?\]);", page, flags=re.S)
+            if mf:
+                base = urljoin(url, "/" + (mp.group(1) + "/" if mp and mp.group(1) else ""))
+                for f in json.loads(mf.group(1)):
+                    n = f.get("name", "")
+                    if re.search(r"pricefull", n, re.I) and re.search(r"\.(gz|xml|zip)$", n, re.I):
+                        files.append(base + n)
             if cfg.chain_code:
                 files = [h for h in files if cfg.chain_code in h]
             if cfg.store_id:
