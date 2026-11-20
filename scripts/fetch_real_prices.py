@@ -77,13 +77,12 @@ CHAINS: list[ChainConfig] = [
     ChainConfig("tivTaam", "טיב טעם", "cerberus", username="TivTaam", expected_code="7290873255550",
                 store_id="514"),   # ליקוט ראשון מזרח — Tiv Taam's online picking store
     # No verified source yet. Add the chain's published guest user here to enable it.
-    # Victory publishes on laibcatalog.co.il (a listing shared by several chains), which blocks access
-    # from outside Israel → fetched from a PC in Israel with scripts/update_local.py. chain_code selects
-    # Victory's files on that shared listing; it's from memory, not yet verified — if no file matches,
-    # the error lists the chain codes that ARE there.
-    ChainConfig("victory", "ויקטורי", "listing", local_only=True, chain_code="7290696200003",
-                urls=os.environ.get("VICTORY_URLS", "").split() or
-                ["https://laibcatalog.co.il/", "http://laibcatalog.co.il/"],
+    # Victory publishes through the laibcatalog.co.il JSON API (webapi/api/getfiles), which only answers
+    # Israeli IPs → fetched from a PC in Israel with scripts/update_local.py. ChainId 7290696200003 per
+    # the open-source il-supermarket-scraper; the file's own ChainId is checked on every run.
+    ChainConfig("victory", "ויקטורי", "laib", local_only=True, chain_code="7290696200003",
+                expected_code="7290696200003",
+                urls=os.environ.get("VICTORY_URLS", "").split() or ["https://laibcatalog.co.il"],
                 disabled="portal blocks connections from outside Israel — run scripts/update_local.py from Israel"),
     # prices.carrefour.co.il refuses connections from outside Israel (GitHub runners included), so
     # Carrefour is fetched from a PC in Israel: scripts/update_carrefour_local.py. Its ChainId is read
@@ -276,7 +275,56 @@ def fetch_listing(cfg: ChainConfig) -> tuple[bytes, dict]:
     raise RuntimeError(" | ".join(errors))
 
 
-FETCHERS = {"shufersal": fetch_shufersal, "cerberus": fetch_cerberus, "listing": fetch_listing}
+def fetch_laib(cfg: ChainConfig) -> tuple[bytes, dict]:
+    """laibcatalog.co.il JSON API (Victory):
+       GET {base}/webapi/api/getfiles?edi=<chain>  → [{fileName, fileType, fileDate, fileSize}, …]
+       GET {base}/webapi/api/getbranches?edi=<chain> → branches (used for the store name / online store)
+       file: {base}/webapi/<chain>/<fileName>"""
+    base = cfg.urls[0].rstrip("/")
+    s = session()
+    listing = get(s, f"{base}/webapi/api/getfiles", params={"edi": cfg.chain_code}).json()
+    if not isinstance(listing, list):
+        raise RuntimeError(f"unexpected getfiles response: {str(listing)[:200]}")
+    files = [f for f in listing if str(f.get("fileType", "")).lower() == "pricefull"
+             or str(f.get("fileName", "")).lower().startswith("pricefull")]
+    if not files:
+        kinds = sorted({str(f.get("fileType")) for f in listing})
+        raise RuntimeError(f"no PriceFull files in getfiles ({len(listing)} files, types: {', '.join(kinds)})")
+
+    store_of = lambda f: (re.search(r"-(\d{3,4})-\d{8}", f.get("fileName", "")) or [None, None])[1]
+    names = {}
+    try:  # branch names, to prefer the online store and to show the store's name
+        for br in get(s, f"{base}/webapi/api/getbranches", params={"edi": cfg.chain_code}).json() or []:
+            num = str(br.get("branchNumber") or br.get("BranchNumber") or br.get("storeId") or "").strip()
+            nm = str(br.get("branchName") or br.get("BranchName") or br.get("storeName") or "").strip()
+            if num:
+                names[num.zfill(3)] = nm
+    except Exception as e:  # cosmetic
+        print(f"[warn]  {cfg.id:10} getbranches failed: {e}", file=sys.stderr)
+
+    def when(f):
+        return str(f.get("fileDate") or "") or (file_time(f.get("fileName", "")) or "")
+
+    def size(f):
+        m = re.match(r"([\d.]+)\s*([KMG]?B)", str(f.get("fileSize", "")), re.I)
+        return float(m.group(1)) * {"B": 1, "KB": 1e3, "MB": 1e6, "GB": 1e9}[m.group(2).upper()] if m else 0
+
+    online = {num for num, nm in names.items() if re.search(r"אינטרנט|אונליין|online|משלוח", nm, re.I)}
+    pinned = [f for f in files if cfg.store_id and (store_of(f) or "").zfill(3) == cfg.store_id.zfill(3)]
+    preferred = pinned or [f for f in files if (store_of(f) or "").zfill(3) in online]
+    if preferred:
+        pick = max(preferred, key=when)            # the chosen/online store's newest file
+    else:
+        newest_day = max(when(f) for f in files)[:10]
+        pick = max((f for f in files if when(f)[:10] == newest_day), key=size)  # biggest store that day
+    name = pick["fileName"]
+    data = decompress(get(s, f"{base}/webapi/{cfg.chain_code}/{name}").content)
+    store = (store_of(pick) or "").zfill(3)
+    return data, {"file": name, "fileTime": file_time(name) or str(pick.get("fileDate") or "").replace(" ", "T") or None,
+                  "storeName": names.get(store), "source": f"{base}/webapi"}
+
+
+FETCHERS = {"shufersal": fetch_shufersal, "cerberus": fetch_cerberus, "listing": fetch_listing, "laib": fetch_laib}
 
 
 # ── XML parsing ────────────────────────────────────────────────────────────────
