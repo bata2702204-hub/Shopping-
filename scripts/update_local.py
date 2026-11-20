@@ -92,6 +92,9 @@ def main() -> int:
         else:
             kept = f" (kept previous prices from {m.get('fileTime')})" if m.get("status") == "local" else ""
             print(f"  ❌ {c}: {m.get('error') or 'see the output above'}{kept}")
+            if "page saved to" in (m.get("error") or ""):
+                print("     → please send that file (it shows how the portal lists its files):\n"
+                      "       git add -f debug && git commit -m \"Debug: portal page\" && git push")
     if not fetched:
         print("\nNothing was fetched — nothing was changed or pushed. Send the output above if it keeps failing.",
               file=sys.stderr)

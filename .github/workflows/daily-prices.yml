@@ -4,10 +4,10 @@ name: Daily real prices
 # into docs/ and pushes to main so GitHub Pages serves the new prices.
 on:
   schedule:
-    # GitHub cron is UTC only. Israel is UTC+2 in winter and UTC+3 in summer, so both 03:00 and
-    # 04:00 UTC are scheduled and the "guard" step lets only the run at 06:xx Israel time proceed.
-    - cron: '0 3 * * *'
-    - cron: '0 4 * * *'
+    # GitHub cron is UTC only, and GitHub often starts scheduled runs hours late. So several runs
+    # are scheduled through the day and the guard below lets the FIRST one from 05:00 Israel time
+    # (UTC+2 winter / UTC+3 summer) do the update; later ones see today's commit and skip.
+    - cron: '0 3,5,8,11,14 * * *'
   workflow_dispatch:
 
 permissions:
@@ -23,19 +23,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Guard — run at 06:00 Israel time (or manually)
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 30   # enough history for the guard to see today's commits
+
+      - name: Guard — once per Israel day, from 05:00 (manual runs always go)
         id: guard
         run: |
+          today=$(TZ=Asia/Jerusalem date +%F)
           hour=$(TZ=Asia/Jerusalem date +%H)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$hour" = "06" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Israel time is ${hour}:xx — the other scheduled run handles today."
+          elif [ "$hour" -lt 5 ]; then
+            echo "Israel time ${hour}:xx — too early, a later scheduled run will update today."
             echo "run=false" >> "$GITHUB_OUTPUT"
+          elif git log --since="36 hours ago" --format=%s | grep -qx "Daily real prices ${today}"; then
+            echo "Already updated today (${today})."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
-
-      - uses: actions/checkout@v4
-        if: steps.guard.outputs.run == 'true'
 
       - uses: actions/setup-python@v5
         if: steps.guard.outputs.run == 'true'

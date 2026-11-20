@@ -223,6 +223,20 @@ def _cerberus_store_name(s: requests.Session, base: str, csrf: str, store_id: st
     return None
 
 
+def _save_debug_page(cfg: ChainConfig, url: str, page: str) -> str | None:
+    """Home runs only: keep a copy of a listing page we couldn't parse, so a parser can be written
+    from the real page (these portals can't be reached from outside Israel)."""
+    if not cfg.local_only:
+        return None
+    try:
+        out = ROOT / "debug" / f"{cfg.id}-{re.sub(r'[^a-z0-9]+', '-', url.lower()).strip('-')}.html"
+        out.parent.mkdir(exist_ok=True)
+        out.write_text(page, encoding="utf-8")
+        return str(out.relative_to(ROOT))
+    except OSError:
+        return None
+
+
 def fetch_listing(cfg: ChainConfig) -> tuple[bytes, dict]:
     errors = []
     for url in cfg.urls:
@@ -251,7 +265,8 @@ def fetch_listing(cfg: ChainConfig) -> tuple[bytes, dict]:
             if cfg.store_id:
                 files = [h for h in files if f"-{cfg.store_id.zfill(3)}-" in h] or files
             if not files:
-                raise RuntimeError("no PriceFull links found")
+                saved = _save_debug_page(cfg, url, page)
+                raise RuntimeError("no PriceFull links found" + (f" (page saved to {saved})" if saved else ""))
             files.sort(key=lambda u: file_time(u) or "", reverse=True)
             data = decompress(get(s, files[0]).content)
             name = files[0].split("?")[0].rsplit("/", 1)[-1]
@@ -282,6 +297,19 @@ def _qty(q: str | None, unit: str | None) -> str:
     return f"{n:g} {unit}"
 
 
+_UNKNOWN_MAKER = {"", "לא ידוע", "כללי", "unknown", "general", "0"}
+
+
+def clean_manufacturer(raw: str | None) -> str:
+    """'מעדנות בע\\"מ \\n' → 'מעדנות'. Files are hand-typed and full of escapes and company suffixes."""
+    s = re.sub(r"\\+n|n\\+", " ", raw or "")      # escaped newlines, also mangled as "n\"
+    s = s.replace("\\", " ")
+    s = re.sub(r'בע\s*[״"\']*\s*מ(?=[\s\-,.;/]|$)|\(\s*\d+\s*\)', " ", s)
+    s = re.sub(r"[\"״'׳]+(?=\s|$)", " ", s)
+    s = re.sub(r"\s+", " ", s).strip(" .,-")
+    return "" if s.lower() in _UNKNOWN_MAKER else s
+
+
 def parse_pricefull(xml: bytes) -> tuple[dict[str, dict], dict]:
     """Return ({barcode: item}, header). Tag names vary in case between chains."""
     items: dict[str, dict] = {}
@@ -302,7 +330,8 @@ def parse_pricefull(xml: bytes) -> tuple[dict[str, dict], dict]:
             continue
         items[code] = {
             "name": name,
-            "manufacturer": f.get("manufacturername", ""),
+            # The tag is ManufactureName (no "r") in the official schema; some chains spell it ManufacturerName.
+            "manufacturer": clean_manufacturer(f.get("manufacturename") or f.get("manufacturername")),
             "unit": _qty(f.get("quantity"), f.get("unitqty")),
             "weighted": f.get("bisweighted", "0") == "1",
             "price": round(price, 2),
@@ -427,6 +456,9 @@ def run(only: list[str] | None, out: Path, merge: bool = False) -> int:
             p = merged.setdefault(key, {**{k: it[k] for k in ("name", "manufacturer", "unit", "weighted")},
                                         "prices": {c: None for c in CHAIN_ORDER}})
             p["prices"][cid] = it["price"]
+            # Manufacturer from any chain that lists it (older carried rows may lack it).
+            if not p["manufacturer"] and it.get("manufacturer"):
+                p["manufacturer"] = clean_manufacturer(it["manufacturer"])
 
     # Keep existing department tags so a run without Node (home PC) doesn't lose them;
     # scripts/enrich_prices.mjs recomputes them whenever it runs.

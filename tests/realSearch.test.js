@@ -14,6 +14,8 @@ const db = parseRealPrices({
     ['4', 'סוכריות חמאה', '', '', 0, [9.9], 'pantry', 'candies'],
     ['5', 'קורנפלקס 750 גרם', '', '', 0, [17.9], 'pantry', 'cornflakes'],
     ['6', 'חלב 3% בקרטון 1 ל', 'תנובה', '', 0, [7.35], 'dairy', 'milk'],
+    ['7', 'מאמאמיה פיצה עם זיתים', 'מעדנות', '', 0, [27.9], 'frozen', 'frozen-pizza'],
+    ['8', 'פיצה איטלקית דקה 320גרם', '', '', 0, [16.9], 'frozen', 'frozen-pizza'],
   ],
 });
 const ids = (q) => searchReal(db, q).map((r) => r.product.barcode);
@@ -33,4 +35,9 @@ test('direct words and exact names', () => {
   assert.equal(exactReal(db, 'קורנפלקס 750 גרם').barcode, '5');
   assert.equal(exactReal(db, 'קורנפלקס'), null);
   assert.deepEqual(ids('x'), []);
+});
+
+test('brand/manufacturer + product word ("פיצה מעדנות")', () => {
+  assert.equal(ids('פיצה מעדנות')[0], '7');
+  assert.ok(ids('מעדנות').includes('7'));
 });
