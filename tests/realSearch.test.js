@@ -41,3 +41,9 @@ test('brand/manufacturer + product word ("פיצה מעדנות")', () => {
   assert.equal(ids('פיצה מעדנות')[0], '7');
   assert.ok(ids('מעדנות').includes('7'));
 });
+
+test('natural phrasings: filler words, plurals, descriptive words', () => {
+  for (const q of ['פיצה של מעדנות', 'פיצות מעדנות', 'פיצה קפואה מעדנות', 'מעדנות פיצה']) {
+    assert.equal(ids(q)[0], '7', q);
+  }
+});
