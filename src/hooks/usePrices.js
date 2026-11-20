@@ -1,31 +1,45 @@
-import { useEffect, useMemo, useState } from 'react';
-import { computeBasket, loadRealPrices, quoteFor } from '../services/priceService.js';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { computeBasket, loadCachedPrices, loadRealPrices, quoteFor } from '../services/priceService.js';
 
 const RECHECK_MS = 30 * 60 * 1000;
 
-/** Load real_prices.json (and re-check when the app returns to the screen). status: 'loading' | 'ready' | 'error'. */
+/**
+ * Real prices for the app. Shows the copy saved on this device at once (if any), then loads the
+ * current file from the site and swaps it in when it's newer. Re-checks when the app returns to the
+ * screen after 30 min (phones keep it open for days).
+ * status: 'loading' | 'ready' | 'error'; retry() loads again (e.g. after an error).
+ */
 export function useRealData() {
   const [state, setState] = useState({ status: 'loading', db: null, error: null });
+  const loadRef = useRef(() => {});
+
   useEffect(() => {
     let alive = true;
     let loadedAt = 0;
+    const newer = (prev, db) => !prev.db || prev.db.generatedAt !== db.generatedAt;
+
     const load = () => {
       loadedAt = Date.now();
+      setState((prev) => (prev.db ? prev : { status: 'loading', db: null, error: null }));
       loadRealPrices()
-        // Keep showing the current prices while checking; swap only if the file is newer.
-        .then((db) => alive && setState((prev) => (prev.db && prev.db.generatedAt === db.generatedAt
-          ? prev : { status: 'ready', db, error: null })))
+        .then((db) => alive && setState((prev) => (newer(prev, db) ? { status: 'ready', db, error: null } : prev)))
         .catch((error) => alive && setState((prev) => (prev.db ? prev : { status: 'error', db: null, error })));
     };
+    loadRef.current = load;
+
+    loadCachedPrices().then((db) => {
+      if (alive && db) setState((prev) => (prev.db ? prev : { status: 'ready', db, error: null }));
+    });
     load();
-    // Phones keep the app open for days: when it comes back to the screen, re-check for new prices.
+
     const onVisible = () => {
       if (document.visibilityState === 'visible' && Date.now() - loadedAt > RECHECK_MS) load();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => { alive = false; document.removeEventListener('visibilitychange', onVisible); };
   }, []);
-  return state;
+
+  return { ...state, retry: () => loadRef.current() };
 }
 
 /** Real quotes for the list and the basket comparison derived from them. */

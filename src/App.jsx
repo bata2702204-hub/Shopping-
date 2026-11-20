@@ -21,7 +21,7 @@ const readTab = () => {
 export default function App() {
   const shop = useShopping();
   const real = useRealData();
-  const prices = usePrices(shop.items, real.db);
+  const prices = { ...usePrices(shop.items, real.db), status: real.status, retry: real.retry };
   const [dark, toggleTheme] = useTheme();
   const [tab, setTabState] = useState(readTab);
   const [toastState, setToast] = useState(null);

@@ -97,10 +97,25 @@ export function parseRealPrices(json) {
 }
 
 /** Load real_prices.json (deployed next to index.html). */
+// The file is ~1 MB compressed: on a phone's mobile data it takes several seconds. A copy is kept in
+// the browser's Cache Storage so the app is ready instantly on the next open (then refreshed).
+const PRICE_CACHE = 'real-prices-v1';
+
 export async function loadRealPrices(url = 'real_prices.json') {
   const res = await fetch(url, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`real_prices.json: HTTP ${res.status}`);
+  try { await (await caches.open(PRICE_CACHE)).put(url, res.clone()); } catch { /* no Cache Storage (private mode…) */ }
   return parseRealPrices(await res.json());
+}
+
+/** The copy saved on this device by the last successful load, or null. */
+export async function loadCachedPrices(url = 'real_prices.json') {
+  try {
+    const hit = await (await caches.open(PRICE_CACHE)).match(url);
+    return hit ? parseRealPrices(await hit.json()) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

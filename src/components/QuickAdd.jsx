@@ -1,5 +1,5 @@
 import { useDeferredValue, useMemo, useRef, useState } from 'react';
-import { Plus, PlusCircle, Sparkles } from 'lucide-react';
+import { AlertTriangle, Loader2, Plus, PlusCircle, RotateCw, Sparkles } from 'lucide-react';
 import { categorize } from '../services/categorizer.js';
 import { exactReal, searchReal } from '../services/realSearch.js';
 import { normalize } from '../services/hebrew.js';
@@ -20,7 +20,7 @@ function PriceHint({ product }) {
   );
 }
 
-export default function QuickAdd({ onAdd, db }) {
+export default function QuickAdd({ onAdd, db, status = 'ready', onRetry }) {
   const [text, setText] = useState('');
   const [focused, setFocused] = useState(false);
   const [flash, setFlash] = useState(null); // [{ name, category, linked }]
@@ -91,6 +91,23 @@ export default function QuickAdd({ onAdd, db }) {
 
       {(suggestions.length > 0 || create) && (
         <ul className="card absolute inset-x-0 top-full z-30 mt-2 max-h-[55vh] overflow-y-auto overscroll-contain p-1 animate-slide-in" role="listbox">
+          {/* Prices not here yet (slow mobile data) or failed: say so, instead of an empty list. */}
+          {!db && status !== 'error' && (
+            <li className="flex items-center gap-3 px-3 py-3 text-sm text-slate-500 dark:text-slate-400" data-testid="prices-loading">
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-emerald-600" />
+              <span>טוען מחירים אמיתיים… התוצאות יופיעו כאן עוד רגע</span>
+            </li>
+          )}
+          {!db && status === 'error' && (
+            <li className="flex items-center gap-3 px-3 py-3 text-sm" data-testid="prices-error">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
+              <span className="flex-1">לא ניתן לטעון את המחירים. בדקו את החיבור לאינטרנט.</span>
+              <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={onRetry}
+                className="flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white">
+                <RotateCw className="h-3.5 w-3.5" /> נסה שוב
+              </button>
+            </li>
+          )}
           {suggestions.map(({ product: p }) => (
             <li key={p.barcode}>
               <button

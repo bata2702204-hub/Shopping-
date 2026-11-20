@@ -41,7 +41,7 @@ export default function ListView({ prices, toast, goCompare }) {
 
   return (
     <div className="space-y-4">
-      <QuickAdd onAdd={shop.addMany} db={db} />
+      <QuickAdd onAdd={shop.addMany} db={db} status={prices.status} onRetry={prices.retry} />
 
       {shop.items.length === 0 ? (
         <EmptyState
