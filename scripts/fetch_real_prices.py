@@ -66,16 +66,16 @@ class ChainConfig:
 
 
 CHAINS: list[ChainConfig] = [
-    # Verified: open portal, files on Azure blob storage. Store 123 = שופרסל דיל חולון-גולדה.
-    ChainConfig("shufersal", "שופרסל", "shufersal", store_id="123"),
+    # Verified: open portal, files on Azure blob storage. Online-store prices (the user's choice).
+    ChainConfig("shufersal", "שופרסל", "shufersal", store_id="413"),  # שופרסל ONLINE (shufersal.co.il)
     # Cerberus portal (url.publishedprices.co.il), each chain's public guest user, empty password.
     # Usernames and ChainIds verified by logging in and reading the files (14.11.2026).
     ChainConfig("ramiLevy", "רמי לוי", "cerberus", username="RamiLevi", expected_code="7290058140886",
-                store_id="055"),   # רמת החייל — pinned so day-to-day prices are from the same store
+                store_id="039"),   # מרלוג אינטרנט — Rami Levy's ONLINE store (what rami-levy.co.il charges)
     ChainConfig("yochananof", "יוחננוף", "cerberus", username="yohananof", expected_code="7290803800003",
-                store_id="017"),   # מודיעין ישפרו
+                store_id="150"),   # הדרים פיקאפ — Yochananof's online/pickup store
     ChainConfig("tivTaam", "טיב טעם", "cerberus", username="TivTaam", expected_code="7290873255550",
-                store_id="014"),   # ראשון מזרח
+                store_id="514"),   # ליקוט ראשון מזרח — Tiv Taam's online picking store
     # No verified source yet. Add the chain's published guest user here to enable it.
     # Victory publishes on laibcatalog.co.il (a listing shared by several chains), which blocks access
     # from outside Israel → fetched from a PC in Israel with scripts/update_local.py. chain_code selects
@@ -325,7 +325,8 @@ def parse_pricefull(xml: bytes) -> tuple[dict[str, dict], dict]:
         el.clear()
         code = f.get("itemcode", "").lstrip("0")
         price = _num(f.get("itemprice"))
-        name = re.sub(r"\s+", " ", f.get("itemname", "")).strip()
+        # ItemName in most files; Rami Levy's online-store file uses ItemNm.
+        name = re.sub(r"\s+", " ", f.get("itemname") or f.get("itemnm") or f.get("manufactureritemdescription") or "").strip()
         if not code or not price or not name:
             continue
         items[code] = {
