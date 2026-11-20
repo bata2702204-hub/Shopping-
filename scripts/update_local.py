@@ -101,7 +101,7 @@ def main() -> int:
         return 1
     shutil.copyfile(tmp, DATA)
     if shutil.which("node"):
-        sh("node", "scripts/enrich_prices.mjs")
+        sh("node", "scripts/enrich_prices.mjs", "--only-new")  # only new products; the cloud re-tags all
     else:
         print("Node.js not found — departments for new Carrefour items will be tagged by the next cloud run.")
 
